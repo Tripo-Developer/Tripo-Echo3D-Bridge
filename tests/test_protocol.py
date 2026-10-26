@@ -39,7 +39,7 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ack['payload']['success']);self.assertTrue(ack['payload']['localStorageReady'])
         return ws
 
-    async def send_chunk(self,ws,index,total,data,file_id='source-id',name='测试}.glb'):
+    async def send_chunk(self,ws,index,total,data,file_id='source-id',name='test}.glb'):
         raw=envelope('file_transfer',fileId=file_id,fileName=name,fileType='glb',chunkIndex=index,chunkTotal=total,chunkSize=len(data)).encode()+data
         await ws.send(raw)
         return json.loads(await asyncio.wait_for(ws.recv(),2))
@@ -127,7 +127,7 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_custom_inbox_persists_new_writes_and_old_queue(self):
         settings = self.inbox / 'settings.json'
-        custom = self.inbox / '自定义 缓存'
+        custom = self.inbox / 'custom cache'
         studio = await self.peer()
         await self.send_chunk(studio, 0, 1, b'old')
         old_model = await self.finish_source(studio)
