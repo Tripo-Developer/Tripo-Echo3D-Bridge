@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>echo3D · Demo</title>
+<style>
+:root{color-scheme:dark;font-family:Segoe UI,Microsoft YaHei UI,sans-serif;color:#e7e9ed;background:#16191e}*{box-sizing:border-box}body{margin:0}main{max-width:1080px;margin:48px auto;padding:0 28px}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:36px}.logo{font-size:30px;font-weight:750;letter-spacing:-1px}.logo span{color:#f9cf00}.tag{color:#bfc4cc;font-size:13px;border:1px solid #464b54;border-radius:20px;padding:6px 14px}h1{font-size:30px;margin:0 0 12px}p{color:#aeb5bf;line-height:1.7}section{background:#22262d;border:1px solid #353b45;border-radius:14px;padding:24px;margin:24px 0}.row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}input{background:#15181d;color:#ddd;border:1px solid #4b5361;border-radius:8px;padding:12px;min-width:280px;flex:1}button,a.download{background:#f9cf00;color:#15171a;border:0;border-radius:8px;padding:12px 18px;font-size:14px;font-weight:650;cursor:pointer;text-decoration:none}button.secondary{background:#343b46;color:#ddd}button:disabled{opacity:.45;cursor:default}#status{margin:18px 0 0;color:#f9cf00}.hint{font-size:13px}h2{font-size:18px;margin:0 0 18px}#models{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}.card{background:#282e37;border-radius:10px;padding:22px;overflow-wrap:anywhere}.card h3{font-size:16px;margin:16px 0 6px}.icon{font-size:28px;color:#f9cf00}.card p{font-size:13px;margin:4px 0}.card a{display:inline-block;margin-top:18px}#empty{padding:35px 0;text-align:center;color:#919baa}progress{width:100%;height:12px;accent-color:#f9cf00}#progressLabel{font-size:13px;margin:12px 0 0}#log{font:12px/1.8 Consolas,monospace;max-height:180px;overflow:auto;white-space:pre-wrap;color:#b1bac8}.green{color:#6ed4a1!important}
+</style>
+<main>
+<header><div class="logo">echo<span>3D</span></div><span class="tag">Demo</span></header>
+<h1>Models from Tripo</h1>
+<section>
+<h2>Bridge</h2>
+<div class="row"><input id="url" aria-label="WebSocket address" value="ws://127.0.0.1:60710/echo3d"><button id="connect">Connect</button><button id="disconnect" class="secondary" disabled>Disconnect</button></div>
+<div id="status">Disconnected</div>
+<progress id="progress" max="100" value="0"></progress><div id="progressLabel">Waiting for models</div>
+</section>
+<section><h2>Received models</h2><div id="empty">No models yet</div><div id="models"></div></section>
+<section><h2>Activity</h2><div id="log"></div></section>
+</main>
+<script type="module">
+import { Echo3DBridgeClient } from './echo3d-bridge-client.js';
+const $=id=>document.getElementById(id);
+let bridge=null; const downloads=[]; let closed=false;
+function log(text){$('log').textContent+=new Date().toLocaleTimeString()+'  '+text+'\n';$('log').textContent=$('log').textContent.split('\n').slice(-80).join('\n');$('log').scrollTop=$('log').scrollHeight;}
+function disconnected(){ $('connect').disabled=false;$('disconnect').disabled=true;$('url').disabled=false;$('status').textContent='Disconnected';$('status').className=''; }
+$('connect').onclick=async()=>{
+ $('connect').disabled=true;$('url').disabled=true;closed=false;
+ const client=bridge=new Echo3DBridgeClient({url:$('url').value,role:'echo3d',onTransfer:async(blob,meta)=>{
+  if(closed) throw new Error('Receiver disconnected');
+  const buffer=await blob.arrayBuffer();
+  const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',buffer)),n=>n.toString(16).padStart(2,'0')).join('');
+  if(closed) throw new Error('Receiver disconnected');
+  const card=document.createElement('article');card.className='card';
+  const icon=document.createElement('div');icon.className='icon';icon.textContent='◇ GLB';card.append(icon);
+  const title=document.createElement('h3');title.textContent=meta.fileName;card.append(title);
+  for(const text of [((blob.size/1024/1024).toFixed(2)+' MiB · Received'),'SHA-256: '+hash]){const p=document.createElement('p');p.textContent=text;card.append(p);}
+  const url=URL.createObjectURL(blob);downloads.push(url);const a=document.createElement('a');a.className='download';a.href=url;a.download=meta.fileName;a.textContent='Download Model';card.append(a);
+  $('models').prepend(card);$('empty').hidden=true;
+  // Bound browser memory. The durable local originals are unaffected.
+  while(downloads.length>8){URL.revokeObjectURL(downloads.shift());$('models').lastElementChild.remove();}
+  $('progress').value=100;$('progressLabel').textContent='Received: '+meta.fileName;
+  log('Received and verified '+meta.fileName+'.');
+  return {success:true,message:'Received by echo3D demo.',simulated:true,sha256:hash};
+ }});
+ client.on('file_transfer',p=>{const percent=(p.chunkIndex+1)/p.chunkTotal*100;$('progress').value=percent;$('progressLabel').textContent=p.fileName+' · '+(p.chunkIndex+1)+'/'+p.chunkTotal+' chunks';});
+ client.on('error',e=>log('Error: '+e.message));
+ client.on('transfer_cancelled',p=>{log(p.message);$('progressLabel').textContent='Transfer interrupted. Reconnect to retry.';});
+ client.on('close',()=>{closed=true;disconnected();log('Disconnected');});
+ try{await client.connect();$('disconnect').disabled=false;$('status').textContent='Connected';$('status').className='green';log('Connected');}
+ catch(e){log(e.message);disconnected();}
+};
+$('disconnect').onclick=()=>{closed=true;bridge?.close();};
+window.addEventListener('beforeunload',()=>{bridge?.close();downloads.forEach(url=>URL.revokeObjectURL(url));});
+</script>
+</html>
