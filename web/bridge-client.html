@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tripo Bridge Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+        }
+        
+        .status-item {
+            flex: 1;
+        }
+        
+        .status-item label {
+            display: block;
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status-item .value {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        .status-item .value.connected {
+            color: #10b981;
+        }
+        
+        .status-item .value.disconnected {
+            color: #ef4444;
+        }
+        
+        .control-section {
+            margin-bottom: 30px;
+        }
+        
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            outline: none;
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+        
+        .btn-secondary:hover:not(:disabled) {
+            background: #4b5563;
+        }
+        
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .btn-danger:hover:not(:disabled) {
+            background: #dc2626;
+        }
+        
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+        
+        input[type="file"] {
+            position: absolute;
+            left: -9999px;
+        }
+        
+        .file-input-label {
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            background: #10b981;
+            color: white;
+            display: inline-block;
+            transition: all 0.2s;
+        }
+        
+        .file-input-label:hover {
+            background: #059669;
+        }
+        
+        .selected-file {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f3f4f6;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .progress-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            display: none;
+        }
+        
+        .progress-section.active {
+            display: block;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+            width: 0%;
+        }
+        
+        .progress-text {
+            margin-top: 8px;
+            font-size: 13px;
+            color: #666;
+            text-align: center;
+        }
+        
+        .log-section {
+            background: #1f2937;
+            border-radius: 12px;
+            padding: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .log-section .section-title {
+            color: white;
+            margin-bottom: 15px;
+        }
+        
+        .log-entry {
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .log-entry.sent {
+            background: rgba(59, 130, 246, 0.1);
+            border-left: 3px solid #3b82f6;
+        }
+        
+        .log-entry.received {
+            background: rgba(16, 185, 129, 0.1);
+            border-left: 3px solid #10b981;
+        }
+        
+        .log-entry.error {
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 3px solid #ef4444;
+        }
+        
+        .log-time {
+            color: #9ca3af;
+            min-width: 80px;
+        }
+        
+        .log-message {
+            color: #e5e7eb;
+            flex: 1;
+        }
+        
+        .log-section::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .log-section::-webkit-scrollbar-track {
+            background: #111827;
+            border-radius: 4px;
+        }
+        
+        .log-section::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+        
+        .log-section::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔗 Tripo Bridge Client</h1>
+            <p>WebSocket Client for DCC Testing</p>
+        </div>
+        
+        <div class="content">
+            <!-- Status Bar -->
+            <div class="status-bar">
+                <div class="status-item">
+                    <label>Connection</label>
+                    <div class="value" id="connectionStatus">Disconnected</div>
+                </div>
+                <div class="status-item">
+                    <label>DCC Version</label>
+                    <div class="value" id="dccVersion">-</div>
+                </div>
+                <div class="status-item">
+                    <label>Plugin Version</label>
+                    <div class="value" id="pluginVersion">-</div>
+                </div>
+            </div>
+            
+            <!-- Connection Control -->
+            <div class="control-section">
+                <div class="section-title">Connection Control</div>
+                <div class="button-group">
+                    <input type="number" id="portInput" placeholder="Port (default: 60710)" 
+                           style="padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; width: 200px;"
+                           min="1" max="65535" value="60710">
+                    <button class="btn-primary" id="connectBtn" onclick="connect()">Connect to DCC</button>
+                    <button class="btn-danger" id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+                </div>
+            </div>
+            
+            <!-- File Transfer -->
+            <div class="control-section">
+                <div class="section-title">File Transfer</div>
+                <div class="button-group">
+                    <div class="file-input-wrapper">
+                        <input type="file" id="fileInput" accept=".zip,.fbx,.obj,.glb,.gltf" onchange="onFileSelected(this)">
+                        <label for="fileInput" class="file-input-label" id="fileLabel">Select File (ZIP/FBX/OBJ/GLB/GLTF)</label>
+                    </div>
+                    <button class="btn-primary" id="sendBtn" onclick="sendFile()" disabled>Send File</button>
+                </div>
+                <div class="selected-file" id="selectedFile" style="display: none;"></div>
+            </div>
+            
+            <!-- Progress -->
+            <div class="progress-section" id="progressSection">
+                <div class="section-title">Transfer Progress</div>
+                <div class="progress-bar">
+                    <div class="progress-bar-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-text" id="progressText">0%</div>
+            </div>
+            
+            <!-- Message Log -->
+            <div class="log-section">
+                <div class="section-title">Message Log</div>
+                <div id="logContainer"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Constants
+        const DEFAULT_PORT = 60710;
+        const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
+        const MESSAGE_TYPE = {
+            HANDSHAKE: 'handshake',
+            HANDSHAKE_ACK: 'handshake_ack',
+            PING: 'ping',
+            PONG: 'pong',
+            FILE_TRANSFER: 'file_transfer',
+            FILE_TRANSFER_ACK: 'file_transfer_ack',
+            FILE_LOADED: 'file_loaded'
+        };
+        
+        // State
+        let ws = null;
+        let selectedFile = null;
+        let fileChunks = [];
+        let currentChunkIndex = -1;
+        let fileId = '';
+        let lastSuccessFileId = null;
+        let transferActive = false;
+        let ackTimer = null;
+        let heartbeatTimer = null;
+        let pongTimer = null;
+        
+        // UI Elements
+        const elements = {
+            connectionStatus: document.getElementById('connectionStatus'),
+            dccVersion: document.getElementById('dccVersion'),
+            pluginVersion: document.getElementById('pluginVersion'),
+            portInput: document.getElementById('portInput'),
+            connectBtn: document.getElementById('connectBtn'),
+            disconnectBtn: document.getElementById('disconnectBtn'),
+            sendBtn: document.getElementById('sendBtn'),
+            fileLabel: document.getElementById('fileLabel'),
+            selectedFileDiv: document.getElementById('selectedFile'),
+            progressSection: document.getElementById('progressSection'),
+            progressFill: document.getElementById('progressFill'),
+            progressText: document.getElementById('progressText'),
+            logContainer: document.getElementById('logContainer')
+        };
+        
+        // Logging
+        function addLog(type, message) {
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.innerHTML = `
+                <span class="log-time">${time}</span>
+                <span class="log-message">${message}</span>
+            `;
+            elements.logContainer.appendChild(entry);
+            
+            // Limit logs to 50 entries
+            while (elements.logContainer.children.length > 50) {
+                elements.logContainer.removeChild(elements.logContainer.firstChild);
+            }
+            
+            // Auto scroll to bottom
+            elements.logContainer.parentElement.scrollTop = elements.logContainer.parentElement.scrollHeight;
+        }
+        
+        // WebSocket Connection
+        function connect() {
+            const port = elements.portInput.value || DEFAULT_PORT;
+            const wsUrl = `ws://localhost:${port}`;
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    addLog('sent', `WebSocket connected to port ${port}, sending handshake...`);
+                    localStorage.setItem('dcc_bridge_port', port);
+                    updateConnectionStatus(true);
+                    startHeartbeat();
+                    const handshake = {
+                        type: MESSAGE_TYPE.HANDSHAKE,
+                        payload: {
+                            clientName: 'Tripo Studio',
+                            protocolVersion: '1.1.0'
+                        }
+                    };
+                    ws.send(new Blob([JSON.stringify(handshake)]));
+                    addLog('sent', 'Handshake sent (binary)');
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        const message = JSON.parse(event.data);
+                        handleMessage(message);
+                    } catch (e) {
+                        addLog('error', 'Failed to parse message: ' + e.message);
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    addLog('error', 'WebSocket error occurred');
+                    updateConnectionStatus(false);
+                };
+                
+                ws.onclose = () => {
+                    addLog('received', 'WebSocket disconnected');
+                    transferActive = false;
+                    clearAckTimer();
+                    stopHeartbeat();
+                    updateConnectionStatus(false);
+                };
+            } catch (error) {
+                addLog('error', 'Failed to connect: ' + error.message);
+            }
+        }
+        
+        function disconnect() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+            stopHeartbeat();
+        }
+        
+        function startHeartbeat() {
+            stopHeartbeat();
+            addLog('sent', '💓 Starting heartbeat (ping every 5s, pong timeout 10s)');
+            heartbeatTimer = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    const pingMessage = { type: MESSAGE_TYPE.PING };
+                    ws.send(new Blob([JSON.stringify(pingMessage)]));
+                    addLog('sent', '💓 Ping sent (binary format)');
+                    if (pongTimer) clearTimeout(pongTimer);
+                    pongTimer = setTimeout(() => {
+                        pongTimer = null;
+                        addLog('error', 'Pong timeout');
+                        disconnect();
+                    }, 10000);
+                }
+            }, 5000);
+        }
+        
+        function stopHeartbeat() {
+            if (heartbeatTimer) {
+                clearInterval(heartbeatTimer);
+                heartbeatTimer = null;
+                addLog('received', 'Heartbeat stopped');
+            }
+            if (pongTimer) {
+                clearTimeout(pongTimer);
+                pongTimer = null;
+            }
+        }
+
+        function clearAckTimer() {
+            if (ackTimer) {
+                clearTimeout(ackTimer);
+                ackTimer = null;
+            }
+        }
+        
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                elements.connectionStatus.textContent = 'Connected';
+                elements.connectionStatus.className = 'value connected';
+                elements.connectBtn.disabled = true;
+                elements.disconnectBtn.disabled = false;
+                elements.sendBtn.disabled = !selectedFile;
+                elements.portInput.disabled = true;
+            } else {
+                elements.connectionStatus.textContent = 'Disconnected';
+                elements.connectionStatus.className = 'value disconnected';
+                elements.connectBtn.disabled = false;
+                elements.disconnectBtn.disabled = true;
+                elements.sendBtn.disabled = true;
+                elements.portInput.disabled = false;
+                elements.dccVersion.textContent = '-';
+                elements.pluginVersion.textContent = '-';
+            }
+        }
+        
+        // Message Handling
+        function handleMessage(message) {
+            switch (message.type) {
+                case MESSAGE_TYPE.HANDSHAKE_ACK:
+                    handleHandshakeAck(message.payload);
+                    break;
+                case MESSAGE_TYPE.FILE_TRANSFER_ACK:
+                    handleFileTransferAck(message.payload);
+                    break;
+                case MESSAGE_TYPE.FILE_LOADED:
+                    handleFileLoaded(message.payload);
+                    break;
+                case MESSAGE_TYPE.PONG:
+                    if (pongTimer) {
+                        clearTimeout(pongTimer);
+                        pongTimer = null;
+                    }
+                    addLog('received', 'Pong received');
+                    break;
+                case 'file_transfer_complete':
+                case 'import_complete':
+                    addLog('received', `Ignored ${message.type}; transfer advances only on file_transfer_ack`);
+                    break;
+                default:
+                    addLog('received', 'Unknown message type: ' + message.type);
+            }
+        }
+        
+        function handleHandshakeAck(payload) {
+            if (payload.success) {
+                addLog('received', `✓ Connected to ${payload.clientName}`);
+                addLog('received', `DCC Version: ${payload.dccVersion}`);
+                addLog('received', `Plugin Version: ${payload.pluginVersion}`);
+                addLog('received', `Protocol Version: ${payload.protocolVersion}`);
+                elements.dccVersion.textContent = payload.dccVersion || '-';
+                elements.pluginVersion.textContent = payload.pluginVersion || '-';
+            } else {
+                addLog('error', 'Handshake failed');
+            }
+        }
+        
+        function handleFileTransferAck(payload) {
+            if (!transferActive || ackTimer !== null
+                || payload.fileId !== fileId
+                || payload.fileIndex !== currentChunkIndex) {
+                addLog('received', `Ignored file_transfer_ack fileId=${payload.fileId} fileIndex=${payload.fileIndex}`);
+                return;
+            }
+
+            ackTimer = setTimeout(() => {
+                ackTimer = null;
+                if (!transferActive) return;
+
+                const index = payload.success ? payload.fileIndex + 1 : payload.fileIndex;
+                if (fileChunks[index]) {
+                    sendChunk(index);
+                    const progress = Math.ceil((payload.fileIndex / fileChunks.length) * 100);
+                    addLog('received', `File transfer${payload.success ? '' : ' retry'} (Progress: ${progress}%)`);
+                    return;
+                }
+
+                transferActive = false;
+                if (payload.success) {
+                    lastSuccessFileId = fileId;
+                    addLog('received', 'File transfer success');
+                    updateProgress(100);
+                    setTimeout(() => {
+                        elements.progressSection.classList.remove('active');
+                        resetFileTransfer();
+                    }, 2000);
+                    return;
+                }
+
+                addLog('error', 'File transfer error');
+            }, 200);
+        }
+
+        function handleFileLoaded(payload) {
+            if (lastSuccessFileId !== payload.fileId) {
+                addLog('received', `Ignored file_loaded with mismatched fileId=${payload.fileId}`);
+                return;
+            }
+
+            if (payload.success) {
+                addLog('received', `✓ File imported successfully: ${payload.fileId}`);
+                return;
+            }
+
+            const codeText = payload.code !== undefined ? ` (code ${payload.code})` : '';
+            const errorText = payload.errorMessage ? `: ${payload.errorMessage}` : '';
+            addLog('error', `✗ File import failed for ${payload.fileId}${codeText}${errorText}`);
+        }
+        
+        // File Handling
+        function onFileSelected(input) {
+            selectedFile = input.files[0];
+            if (selectedFile) {
+                elements.selectedFileDiv.style.display = 'block';
+                elements.selectedFileDiv.textContent = `Selected: ${selectedFile.name} (${formatFileSize(selectedFile.size)})`;
+                elements.sendBtn.disabled = !ws || ws.readyState !== WebSocket.OPEN;
+            } else {
+                elements.selectedFileDiv.style.display = 'none';
+                elements.sendBtn.disabled = true;
+            }
+        }
+        
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+        }
+        
+        async function sendFile() {
+            if (!selectedFile) {
+                addLog('error', 'No file selected');
+                return;
+            }
+            
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addLog('error', 'Not connected to DCC');
+                return;
+            }
+            
+            clearAckTimer();
+            lastSuccessFileId = null;
+            fileId = 'file_' + Date.now();
+            currentChunkIndex = -1;
+            fileChunks = [];
+            const totalChunks = Math.ceil(selectedFile.size / CHUNK_SIZE);
+            
+            for (let i = 0; i < totalChunks; i++) {
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, selectedFile.size);
+                const chunk = selectedFile.slice(start, end);
+                fileChunks.push(await chunk.arrayBuffer());
+            }
+            
+            if (!fileChunks.length) {
+                addLog('error', 'No chunks to send, file may be empty');
+                return;
+            }
+
+            addLog('sent', `Starting file transfer: ${selectedFile.name} (${totalChunks} chunks, fileId=${fileId})`);
+            elements.progressSection.classList.add('active');
+            updateProgress(0);
+            transferActive = true;
+            sendChunk(0);
+        }
+        
+        function sendChunk(index) {
+            if (!transferActive || index >= fileChunks.length) return;
+            currentChunkIndex = index;
+            
+            const fileExtension = selectedFile.name.split('.').pop().toLowerCase();
+            const message = {
+                type: MESSAGE_TYPE.FILE_TRANSFER,
+                payload: {
+                    fileId: fileId,
+                    fileName: selectedFile.name,
+                    fileType: fileExtension,
+                    chunkIndex: index,
+                    chunkTotal: fileChunks.length,
+                    chunkSize: fileChunks[index].byteLength
+                }
+            };
+            
+            const messageBlob = new Blob([JSON.stringify(message)]);
+            const chunkBlob = new Blob([fileChunks[index]]);
+            const combinedBlob = new Blob([messageBlob, chunkBlob]);
+            
+            ws.send(combinedBlob);
+            
+            const progress = Math.round(((index + 1) / fileChunks.length) * 100);
+            updateProgress(progress);
+            addLog('sent', `Sent chunk ${index + 1}/${fileChunks.length} (${progress}%)`);
+        }
+        
+        function updateProgress(percent) {
+            elements.progressFill.style.width = percent + '%';
+            elements.progressText.textContent = `${percent}%`;
+        }
+        
+        function resetFileTransfer() {
+            transferActive = false;
+            clearAckTimer();
+            selectedFile = null;
+            fileChunks = [];
+            currentChunkIndex = -1;
+            fileId = '';
+            document.getElementById('fileInput').value = '';
+            elements.selectedFileDiv.style.display = 'none';
+            elements.sendBtn.disabled = true;
+        }
+        
+        // Initialize
+        // Load saved port from localStorage
+        const savedPort = localStorage.getItem('dcc_bridge_port');
+        if (savedPort) {
+            elements.portInput.value = savedPort;
+        }
+        addLog('received', 'Client initialized. Enter port and click "Connect to DCC" to start.');
+    </script>
+</body>
+</html>

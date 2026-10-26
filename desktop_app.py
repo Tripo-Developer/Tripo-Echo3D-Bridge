@@ -2,22 +2,58 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import os
 import queue
 import socket
+import sys
 import threading
-import tkinter as tk
+import webbrowser
+from http import HTTPStatus
+from pathlib import Path
 from contextlib import AsyncExitStack
 from datetime import datetime
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox
+from desktop_ui import BridgeWindow
 
-from echo3d_bridge.server import Relay, serve, PORT, MAX_MESSAGE_BYTES
+from echo3d_bridge.server import Relay, serve, PORT, MAX_MESSAGE_BYTES, DEFAULT_INBOX
+from echo3d_bridge.settings import load_inbox, save_inbox, validate_inbox
 
 HOST = "127.0.0.1"
+ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+WEB_DIR = ROOT / 'web'
+
+
+def is_port_in_use(error: OSError) -> bool:
+    """Only classify errors raised while binding the listener sockets."""
+    return (error.errno in (errno.EADDRINUSE, 10048)
+            or getattr(error, 'winerror', None) == 10048
+            or '10048' in str(error)
+            or 'address already in use' in str(error).lower())
+
+
+def serve_demo(connection, request):
+    # Static demo assets on the existing listener; WS endpoints pass through.
+    pages = {'/demo': (WEB_DIR / 'echo3d-demo.html', 'text/html; charset=utf-8'),
+             '/bridge-client.html': (WEB_DIR / 'bridge-client.html', 'text/html; charset=utf-8'),
+             '/echo3d-bridge-client.js': (WEB_DIR / 'echo3d-bridge-client.js', 'text/javascript; charset=utf-8')}
+    item = pages.get(request.path.split('?')[0])
+    if item is None or not item[0].is_file():
+        return None
+    response = connection.respond(HTTPStatus.OK, item[0].read_text(encoding='utf-8-sig'))
+    del response.headers['Content-Type']
+    response.headers['Content-Type'] = item[1]
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 class RelayRuntime:
-    def __init__(self, events: queue.Queue[tuple[str, dict]]):
+    def __init__(self, events: queue.Queue[tuple[str, dict]], inbox: Path,
+                 *, port: int = PORT, retry_interval: float = 3.0):
         self.events, self.loop = events, asyncio.new_event_loop()
+        self.inbox = inbox
+        self.port = port
+        self.retry_interval = retry_interval
         self.thread = threading.Thread(target=self._run, name="echo3d-bridge", daemon=True)
         self.stop_event: asyncio.Event | None = None
         self.server = None
@@ -41,18 +77,71 @@ class RelayRuntime:
 
     async def _serve(self):
         self.stop_event = asyncio.Event()
-        self.relay = Relay(event_sink=self._emit)
-        async with AsyncExitStack() as stack:
-            options = dict(max_size=MAX_MESSAGE_BYTES, ping_interval=20, ping_timeout=30,
-                           close_timeout=1, compression=None)
-            self.server = await stack.enter_async_context(serve(self.relay.handle, HOST, PORT, **options))
-            # Separate loopback sockets prevent localhost resolving to an unserved ::1.
-            if socket.has_ipv6:
-                await stack.enter_async_context(serve(self.relay.handle, "::1", PORT, **options))
-            self._emit("ready", {"url": f"ws://{HOST}:{PORT}/"})
-            if not self.stop_requested.is_set():
-                await self.stop_event.wait()
+        self.relay = Relay(event_sink=self._emit, inbox=self.inbox)
+        announced_conflict = False
+        try:
+            while not self.stop_requested.is_set() and not self.stop_event.is_set():
+                bound = False
+                try:
+                    async with AsyncExitStack() as stack:
+                        options = dict(max_size=MAX_MESSAGE_BYTES, ping_interval=20, ping_timeout=30,
+                                       close_timeout=1, compression=None, process_request=serve_demo,
+                                       start_serving=False)
+                        # Bind both before accepting clients. A failed IPv6 bind must release IPv4.
+                        listeners = [await stack.enter_async_context(
+                            serve(self.relay.handle, HOST, self.port, **options))]
+                        if socket.has_ipv6:
+                            listeners.append(await stack.enter_async_context(
+                                serve(self.relay.handle, '::1', self.port, **options)))
+                        bound = True
+                        if self.stop_requested.is_set() or self.stop_event.is_set():
+                            break
+                        for listener in listeners:
+                            await listener.start_serving()
+                        self.server = listeners[0]
+                        self._emit('ready', {'url': f'ws://{HOST}:{self.port}/'})
+                        await self.stop_event.wait()
+                    break
+                except OSError as exc:
+                    if bound or not is_port_in_use(exc):
+                        if not bound and (exc.errno in (errno.EACCES, 10013)
+                                          or getattr(exc, 'winerror', None) == 10013
+                                          or '10013' in str(exc)):
+                            raise RuntimeError(
+                                f'The system denied access to port {self.port}. '
+                                'Check reserved ports or permissions, then restart Bridge.') from exc
+                        raise
+                    if not announced_conflict:
+                        self._emit('port_in_use', {'port': self.port, 'retryInterval': self.retry_interval})
+                        announced_conflict = True
+                    try:
+                        await asyncio.wait_for(self.stop_event.wait(), timeout=self.retry_interval)
+                    except asyncio.TimeoutError:
+                        pass
+        finally:
+            self.server = None
             self.relay.clear_transfer()
+
+    def change_inbox(self, path: Path):
+        async def apply():
+            try:
+                self.inbox = await self.relay.change_inbox(path)
+                self._emit('cache_changed', {'path': str(self.inbox)})
+            except Exception as exc:
+                self._emit('cache_error', {'message': str(exc)})
+        if self.loop.is_running() and self.relay is not None:
+            asyncio.run_coroutine_threadsafe(apply(), self.loop)
+        else:
+            # Permit correcting an unavailable startup directory without losing the UI.
+            def save_for_restart():
+                try:
+                    candidate = validate_inbox(path)
+                    save_inbox(candidate)
+                    self.inbox = candidate
+                    self._emit('cache_changed', {'path': str(candidate), 'restart': True})
+                except Exception as exc:
+                    self._emit('cache_error', {'message': str(exc)})
+            threading.Thread(target=save_for_restart, daemon=True).start()
 
     def stop(self):
         self.stop_requested.set()
@@ -62,108 +151,96 @@ class RelayRuntime:
             self.thread.join(timeout=5)
 
 
-class App(tk.Tk):
+class App(BridgeWindow):
     def __init__(self):
         super().__init__()
-        self.title("Tripo Bridge · echo3D")
-        self.geometry("760x560")
-        self.minsize(680, 500)
+        self.title("Tripo echo3D Bridge")
         self.events: queue.Queue[tuple[str, dict]] = queue.Queue()
-        self.runtime = RelayRuntime(self.events)
+        settings_error = None
+        try:
+            inbox = load_inbox()
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            inbox = DEFAULT_INBOX.resolve()
+            settings_error = f'Unable to read cache settings. Using the default folder: {exc}'
+        self.runtime = RelayRuntime(self.events, inbox)
         self.connected = {"studio": False, "echo3d": False}
+        self.demo_ready = False
         self.protocol("WM_DELETE_WINDOW", self.close)
         self._build_ui()
+        self._log(f'Local connection · port {PORT}')
+        if settings_error:
+            self._log(settings_error)
         self.runtime.start()
         self.after(100, self._drain_events)
 
-    def _build_ui(self):
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        self.configure(background="#383838")
-        style.configure(".", background="#383838", foreground="#E0E0E0", font=("Microsoft YaHei UI", 10))
-        style.configure("TLabelframe", bordercolor="#555555", relief="solid")
-        style.configure("TLabelframe.Label", foreground="#F9CF00")
-        style.configure("TButton", background="#F9CF00", foreground="#222222", padding=(12, 6))
-        style.map("TButton", background=[("active", "#DDB800")])
-        style.configure("Horizontal.TProgressbar", background="#F9CF00", troughcolor="#252525")
-        root = ttk.Frame(self, padding=24)
-        root.pack(fill="both", expand=True)
-        ttk.Label(root, text="Tripo Bridge", font=("Segoe UI", 22, "bold")).pack(anchor="w")
-        ttk.Label(root, text="echo3D · 在两个前端之间传递模型", foreground="#AAAAAA").pack(anchor="w", pady=(2, 18))
+    def open_studio(self):
+        if not self.demo_ready:
+            self._log('Tripo Studio client is available once the bridge is running.')
+            return
+        webbrowser.open(f'http://{HOST}:{PORT}/bridge-client.html')
 
-        status = ttk.LabelFrame(root, text="Bridge 状态", padding=14)
-        status.pack(fill="x")
-        self.status_var = tk.StringVar(value="正在启动…")
-        ttk.Label(status, textvariable=self.status_var, font=("Segoe UI", 11, "bold")).pack(anchor="w")
-        self.endpoint_var = tk.StringVar(value=f"Tripo Studio：ws://{HOST}:{PORT}/")
-        ttk.Label(status, textvariable=self.endpoint_var).pack(anchor="w", pady=(5, 0))
-        buttons = ttk.Frame(status)
-        buttons.pack(anchor="w", pady=(9, 0))
-        self.copy_btn = ttk.Button(buttons, text="复制 Studio 地址", command=self.copy_endpoint, state="disabled")
-        self.copy_btn.pack(side="left")
-        self.echo_copy_btn = ttk.Button(buttons, text="复制 echo3D 地址", command=lambda: self.copy_endpoint("/echo3d"), state="disabled")
-        self.echo_copy_btn.pack(side="left", padx=10)
-
-        peers = ttk.LabelFrame(root, text="连接状态", padding=14)
-        peers.pack(fill="x", pady=14)
-        self.studio_var = tk.StringVar(value="Tripo Studio：未连接")
-        self.echo_var = tk.StringVar(value="echo3D 前端：未连接")
-        ttk.Label(peers, textvariable=self.studio_var).pack(anchor="w")
-        ttk.Label(peers, textvariable=self.echo_var).pack(anchor="w", pady=(6, 0))
-
-        transfer = ttk.LabelFrame(root, text="传输状态", padding=14)
-        transfer.pack(fill="x")
-        self.transfer_var = tk.StringVar(value="暂无传输")
-        ttk.Label(transfer, textvariable=self.transfer_var).pack(anchor="w")
-        self.progress = ttk.Progressbar(transfer, maximum=100, mode="determinate")
-        self.progress.pack(fill="x", pady=(9, 0))
-
-        log_frame = ttk.LabelFrame(root, text="运行日志", padding=10)
-        log_frame.pack(fill="both", expand=True, pady=(14, 0))
-        self.log = tk.Text(log_frame, height=9, state="disabled", wrap="word", relief="flat",
-                           background="#2A2A2A", foreground="#CCCCCC", font=("Microsoft YaHei UI", 9))
-        self.log.pack(fill="both", expand=True)
+    def open_demo(self):
+        if not self.demo_ready:
+            self._log('echo3D demo page is available once the bridge is running.')
+            return
+        webbrowser.open(f'http://{HOST}:{PORT}/demo')
 
     def _drain_events(self):
         try:
             while True:
                 event, payload = self.events.get_nowait()
                 if event == "ready":
-                    self.status_var.set("运行中")
-                    self.endpoint_var.set(f"Studio：{payload['url']}   Echo3D：ws://{HOST}:{PORT}/echo3d")
-                    self.copy_btn.configure(state="normal")
-                    self.echo_copy_btn.configure(state="normal")
-                    self._log("Bridge 已启动，等待两个前端连接")
+                    self.show_service(True)
+                    self.demo_ready = True
+                    self.change_cache_btn.configure(state='normal')
+                    self._log("Bridge started.")
+                elif event == 'port_in_use':
+                    self.demo_ready = False
+                    self.change_cache_btn.configure(state='normal')
+                    self.show_port_wait(payload['port'], payload['retryInterval'])
+                    self._log(f"Port {payload['port']} is in use. Retrying every {payload['retryInterval']:g}s.")
                 elif event == "error":
-                    self.status_var.set("启动失败")
-                    self._log(f"错误：{payload['message']}")
+                    self.change_cache_btn.configure(state='normal')
+                    self.demo_ready = False
+                    self.show_service(False)
+                    self.phase_label.configure(text='', text_color='#F2F3F4')
+                    self.transfer_var.set(payload['message'] or 'Bridge could not start')
+                    self.transfer_label.configure(text_color='#F38B88')
+                    self.transfer_hint.configure(text='Check Logs for details. Correct the problem, then restart Bridge.')
+                    self._log(f"Error: {payload['message']}")
                     messagebox.showerror("Echo3D Bridge", payload["message"])
+                elif event == 'cache_changed':
+                    self.cache_var.set(payload['path'])
+                    self.change_cache_btn.configure(state='normal')
+                    self._log('Cache folder updated: ' + payload['path'])
+                    if payload.get('restart'):
+                        self.status_var.set('  Restart required')
+                        self.transfer_hint.configure(text='Cache settings updated. Restart Bridge to apply.')
+                elif event == 'cache_error':
+                    self.change_cache_btn.configure(state='normal')
+                    self._log('Cache folder unchanged: ' + payload['message'])
+                    messagebox.showerror('Unable to Change Cache Folder', payload['message'], parent=self)
                 elif event == "connections":
                     self._set_peer("studio", payload.get("studioConnected", False))
                     self._set_peer("echo3d", payload.get("echo3dConnected", False))
                 elif event == "progress":
-                    percent = float(payload.get("percent", 0))
-                    self.progress.configure(value=percent)
-                    self.transfer_var.set(f"{payload.get('fileName', '')} · {percent:.0f}% · {payload.get('stage', '')}")
-                elif event == "result":
-                    self.transfer_var.set(("echo3D 已确认处理完成：" if payload.get("success") else "传输失败：") + (payload.get("message") or payload.get("fileName", "")))
-                    self.progress.configure(value=100 if payload.get("success") else 0)
-                    self._log(self.transfer_var.get())
+                    self.show_progress(payload)
+                elif event in ("result", "delivery"):
+                    self.show_result(event, payload)
+                    self._log(payload.get('message') or payload.get('fileName', ''))
+                    if payload.get('localPath'): self._log('Local file: ' + payload['localPath'])
                 elif event == "peer_disconnected":
-                    self._log(f"{payload.get('role')} 已断开")
+                    self._log(f"{payload.get('role')} disconnected")
         except queue.Empty:
             pass
         self.after(100, self._drain_events)
 
     def _set_peer(self, role: str, connected: bool):
         if self.connected[role] != connected:
-            self._log(f"{role} {'已连接' if connected else '已断开'}")
+            self._log(f"{role} {'Connected' if connected else 'disconnected'}")
         self.connected[role] = connected
-        state = "已连接" if connected else "未连接"
-        if role == "studio":
-            self.studio_var.set(f"Tripo Studio：{state}")
-        else:
-            self.echo_var.set(f"echo3D 前端：{state}")
+        self.peer_labels[role].configure(text='●  Connected' if connected else '○  Not connected',
+                                         text_color='#7ED5AD' if connected else '#A6ADB5')
 
     def _log(self, text: str):
         self.log.configure(state="normal")
@@ -174,14 +251,23 @@ class App(tk.Tk):
         self.log.see("end")
         self.log.configure(state="disabled")
 
-    def copy_endpoint(self, path="/"):
-        self.clipboard_clear()
-        self.clipboard_append(f"ws://{HOST}:{PORT}{path}")
-        self._log("已复制 WebSocket 地址")
-
     def close(self):
         self.runtime.stop()
         self.destroy()
+
+    def open_inbox(self):
+        try:
+            self.runtime.inbox.mkdir(parents=True, exist_ok=True)
+            os.startfile(self.runtime.inbox)
+        except OSError as exc:
+            messagebox.showerror('Unable to Open Cache Folder', str(exc), parent=self)
+
+    def choose_inbox(self):
+        selected = filedialog.askdirectory(parent=self, title='Select Cache Folder',
+                                          initialdir=str(self.runtime.inbox), mustexist=False)
+        if selected:
+            self.change_cache_btn.configure(state='disabled')
+            self.runtime.change_inbox(Path(selected))
 
 
 if __name__ == "__main__":

@@ -1,104 +1,170 @@
 import asyncio
 import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
-from echo3d_bridge.server import Relay, parse_message
+from echo3d_bridge.server import Relay, parse_message, CHUNK_BYTES, MAX_MESSAGE_BYTES
+from echo3d_bridge.settings import load_inbox, save_inbox
 
-def envelope(kind, payload):
-    return json.dumps({"type": kind, "payload": payload})
+
+def envelope(kind, **payload):
+    return json.dumps(dict(type=kind,payload=payload))
+
 
 class ProtocolTests(unittest.IsolatedAsyncioTestCase):
-    async def test_balanced_json_header(self):
-        msg, body = parse_message(b'{"type":"file_transfer","payload":{"fileName":"a}.glb"}}abc')
-        self.assertEqual(msg["type"], "file_transfer")
-        self.assertEqual(body, b"abc")
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.inbox = Path(self.temp.name)
+        self.events = []
+        self.relay = Relay(inbox=self.inbox, receipt_timeout=0.5,
+                           event_sink=lambda event,p:self.events.append((event,p)))
+        self.server = await serve(self.relay.handle,'127.0.0.1',0,max_size=MAX_MESSAGE_BYTES,compression=None)
+        self.url='ws://127.0.0.1:'+str(self.server.sockets[0].getsockname()[1])
+        self.sockets=[]
 
-    async def test_initial_state(self):
-        relay = Relay()
-        self.assertFalse(relay.state()["studioConnected"])
-        self.assertFalse(relay.state()["echo3dConnected"])
+    async def asyncTearDown(self):
+        for ws in self.sockets: await ws.close()
+        self.server.close(); await self.server.wait_closed()
+        self.relay.clear_transfer()
+        self.temp.cleanup()
 
-    async def test_existing_dcc_protocol_and_acknowledged_transfer(self):
-        relay = Relay()
-        async with serve(relay.handle, "127.0.0.1", 0, max_size=6 * 1024 * 1024) as server:
-            port = server.sockets[0].getsockname()[1]
-            async with connect(f"ws://127.0.0.1:{port}/") as studio, \
-                    connect(f"ws://127.0.0.1:{port}/echo3d") as echo:
-                hello = envelope("handshake", {"clientName": "Tripo Studio", "protocolVersion": "1.0.0"})
-                await studio.send(hello)
-                studio_ack = json.loads(await studio.recv())
-                self.assertEqual(studio_ack["type"], "handshake_ack")
-                self.assertTrue(studio_ack["payload"]["success"])
-                await echo.send(hello)
-                echo_ack = json.loads(await echo.recv())
-                self.assertTrue(echo_ack["payload"]["success"])
+    async def peer(self,role='studio'):
+        ws=await connect(self.url+('/echo3d' if role=='echo3d' else '/'),max_size=MAX_MESSAGE_BYTES,origin='null')
+        self.sockets.append(ws)
+        await ws.send(envelope('handshake',protocolVersion='1.1.0').encode())
+        ack=json.loads(await asyncio.wait_for(ws.recv(),2))
+        self.assertTrue(ack['payload']['success']);self.assertTrue(ack['payload']['localStorageReady'])
+        return ws
 
-                await studio.send(envelope("ping", {}))
-                self.assertEqual(json.loads(await studio.recv())["type"], "pong")
+    async def send_chunk(self,ws,index,total,data,file_id='source-id',name='test}.glb'):
+        raw=envelope('file_transfer',fileId=file_id,fileName=name,fileType='glb',chunkIndex=index,chunkTotal=total,chunkSize=len(data)).encode()+data
+        await ws.send(raw)
+        return json.loads(await asyncio.wait_for(ws.recv(),2))
 
-                file_id, chunk = "file_123", b"glTF-demo"
-                header = envelope("file_transfer", {"fileId": file_id, "fileName": "demo.glb",
-                    "fileType": "glb", "chunkIndex": 0, "chunkTotal": 1, "chunkSize": len(chunk)})
-                await studio.send(header.encode() + chunk)
-                received, body = parse_message(await echo.recv())
-                self.assertEqual(received["payload"]["fileId"], file_id)
-                self.assertEqual(body, chunk)
+    async def finish_source(self,ws):
+        msgs=[json.loads(await asyncio.wait_for(ws.recv(),2)) for _ in range(3)]
+        self.assertEqual([m['type'] for m in msgs],['file_transfer_complete','import_complete','file_loaded'])
+        self.assertTrue(msgs[-1]['payload']['localSaved'])
+        self.assertFalse(msgs[-1]['payload']['echo3dDelivered'])
+        return Path(msgs[-1]['payload']['localPath'])
 
-                await echo.send(envelope("file_transfer_ack", {"fileId": file_id, "fileIndex": 0, "success": True}))
-                self.assertEqual(json.loads(await studio.recv())["type"], "file_transfer_ack")
-                await echo.send(envelope("file_transfer_complete", {"fileId": file_id, "status": "success"}))
-                self.assertEqual(json.loads(await studio.recv())["type"], "file_transfer_complete")
-                await echo.send(envelope("file_loaded", {"fileId": file_id, "success": True}))
-                self.assertEqual(json.loads(await studio.recv())["type"], "import_complete")
-                self.assertEqual(json.loads(await studio.recv())["type"], "file_loaded")
-                self.assertIsNone(relay.transfer)
+    async def receive_model(self,ws,expected,success=True):
+        data=bytearray();file_id=None
+        while len(data)<len(expected):
+            msg,body=parse_message(await asyncio.wait_for(ws.recv(),3));p=msg['payload'];file_id=p['fileId']
+            data.extend(body)
+            await ws.send(envelope('file_transfer_ack',fileId=file_id,fileIndex=p['chunkIndex'],success=True))
+        self.assertEqual(bytes(data),expected)
+        await ws.send(envelope('file_transfer_complete',fileId=file_id,status='success'))
+        await ws.send(envelope('import_complete',fileId=file_id,success=success,message='test receiver result'))
+        for _ in range(100):
+            if any(e=='delivery' and p['success']==success for e,p in self.events): break
+            await asyncio.sleep(.01)
+        self.assertTrue(any(e=='delivery' and p['success']==success for e,p in self.events))
 
-    async def test_multichunk_retry_timeout_and_reconnect(self):
-        relay = Relay(receipt_timeout=0.4)
-        async with serve(relay.handle, "127.0.0.1", 0, max_size=6 * 1024 * 1024, compression=None) as server:
-            port = server.sockets[0].getsockname()[1]
-            async with connect(f"ws://127.0.0.1:{port}/", origin="null") as studio:
-                await studio.send(envelope("handshake", {"protocolVersion": "1.1.0"}).encode())
-                self.assertTrue(json.loads(await studio.recv())["payload"]["success"])
-                async def chunk(index, data, file_id="large"):
-                    raw = envelope("file_transfer", {"fileId":file_id,"fileName":"中文}.glb","fileType":"glb",
-                        "chunkIndex":index,"chunkTotal":2,"chunkSize":len(data)}).encode()+data
-                    await studio.send(raw)
-                    return raw
-                await chunk(0,b"test", "missing")
-                self.assertFalse(json.loads(await studio.recv())["payload"]["success"])
-                await studio.recv() # file_loaded
-                await studio.recv() # error
-                async with connect(f"ws://127.0.0.1:{port}/echo3d",max_size=6*1024*1024) as echo:
-                    await echo.send(envelope("handshake", {"protocolVersion":"1.0.0"}))
-                    await echo.recv()
-                    raw = await chunk(0,b"x"*(5*1024*1024))
-                    self.assertEqual(await echo.recv(),raw)
-                    await echo.send(envelope("file_transfer_ack", {"fileId":"large","fileIndex":0,"success":False}))
-                    self.assertFalse(json.loads(await studio.recv())["payload"]["success"])
-                    raw = await chunk(0,b"x"*(5*1024*1024))
-                    self.assertEqual(await echo.recv(),raw)
-                    await echo.send(envelope("file_transfer_ack", {"fileId":"large","fileIndex":0,"success":True}))
-                    await studio.recv()
-                    raw = await chunk(1,b"tail")
-                    self.assertEqual(await echo.recv(),raw)
-                    # A stale ACK cannot advance the second chunk.
-                    await echo.send(envelope("file_transfer_ack", {"fileId":"large","fileIndex":0,"success":True}))
-                    await echo.send(envelope("ping", {})); await echo.recv()
-                    self.assertEqual(relay.transfer.index,1)
-                    # Disconnect must fail the in-flight model and release the role.
-                result=json.loads(await studio.recv())
-                self.assertFalse(result['payload']['success'])
-                await studio.recv()
-                async with connect(f"ws://127.0.0.1:{port}/echo3d") as echo:
-                    await echo.send(envelope("handshake", {"protocolVersion":"1.0.0"}))
-                    self.assertTrue(json.loads(await echo.recv())["payload"]["success"])
-                    await chunk(0,b"timeout", "new")
-                    await echo.recv()
-                    result=json.loads(await asyncio.wait_for(studio.recv(), 2))
-                    self.assertIn('timed out',result['payload']['message'])
-                    self.assertIsNone(relay.transfer)
+    async def test_local_save_without_receiver_then_deliver_after_restart(self):
+        studio=await self.peer()
+        expected=b'glTF'+b'x'*(CHUNK_BYTES+13)
+        for i in range(2):
+            ack=await self.send_chunk(studio,i,2,expected[i*CHUNK_BYTES:(i+1)*CHUNK_BYTES])
+            self.assertEqual(ack['type'],'file_transfer_ack');self.assertTrue(ack['payload']['success'])
+        path=await self.finish_source(studio)
+        self.assertEqual(path.read_bytes(),expected)
+        await studio.close();self.server.close();await self.server.wait_closed()
+        self.relay=Relay(inbox=self.inbox,event_sink=lambda e,p:self.events.append((e,p)))
+        self.server=await serve(self.relay.handle,'127.0.0.1',0,max_size=MAX_MESSAGE_BYTES)
+        self.url='ws://127.0.0.1:'+str(self.server.sockets[0].getsockname()[1])
+        echo=await self.peer('echo3d')
+        await self.receive_model(echo,expected)
+        self.assertEqual(path.read_bytes(),expected)
+        self.assertEqual(self.relay.pending(),[])
 
-if __name__ == "__main__":
-    unittest.main()
+    async def test_online_receiver_failure_keeps_local_success_and_file(self):
+        echo=await self.peer('echo3d');studio=await self.peer()
+        await self.send_chunk(studio,0,1,b'glTF')
+        path=await self.finish_source(studio)
+        await self.receive_model(echo,b'glTF',success=False)
+        self.assertTrue(path.exists());self.assertEqual(len(self.relay.pending()),1)
+
+    async def test_receiver_disconnect_does_not_interrupt_source(self):
+        echo=await self.peer('echo3d');studio=await self.peer()
+        self.assertTrue((await self.send_chunk(studio,0,2,b'glTF'))['payload']['success'])
+        await echo.close()
+        self.assertTrue((await self.send_chunk(studio,1,2,b'tail'))['payload']['success'])
+        path=await self.finish_source(studio)
+        self.assertEqual(path.read_bytes(),b'glTFtail')
+        echo=await self.peer('echo3d');await self.receive_model(echo,b'glTFtail')
+
+    async def test_unfinished_source_disconnect_cleanup_and_safe_filename(self):
+        studio=await self.peer()
+        await self.send_chunk(studio,0,2,b'partial')
+        await studio.close()
+        for _ in range(100):
+            if self.relay.transfer is None: break
+            await asyncio.sleep(.01)
+        self.assertEqual(list(self.inbox.rglob('*.part')),[])
+        self.assertEqual(self.relay.pending(),[])
+        studio=await self.peer()
+        await self.send_chunk(studio,0,1,b'glTF',name='../../CON.glb')
+        path=await self.finish_source(studio)
+        self.assertTrue(path.is_relative_to(self.inbox));self.assertEqual(path.read_bytes(),b'glTF')
+
+    async def test_disk_error_never_sends_success_ack(self):
+        studio=await self.peer()
+        with patch.object(self.relay,'append_chunk',side_effect=OSError('Disk full')):
+            result=await self.send_chunk(studio,0,1,b'glTF')
+        self.assertEqual(result['type'],'import_complete')
+        self.assertFalse(result['payload']['success'])
+        self.assertIn('Disk full',result['payload']['message'])
+        self.assertEqual(self.relay.pending(),[])
+
+    async def test_json_prefix_with_escaped_brace(self):
+        msg,body=parse_message(b'{"type":"file_transfer","payload":{"fileName":"a}.glb"}}abc')
+        self.assertEqual(body,b'abc')
+
+    async def test_custom_inbox_persists_new_writes_and_old_queue(self):
+        settings = self.inbox / 'settings.json'
+        custom = self.inbox / 'custom cache'
+        studio = await self.peer()
+        await self.send_chunk(studio, 0, 1, b'old')
+        old_model = await self.finish_source(studio)
+        await self.relay.change_inbox(custom, lambda p: save_inbox(p, settings))
+        self.assertEqual(load_inbox(settings), custom.resolve())
+        self.assertTrue(old_model.exists())
+        self.assertEqual(self.relay.pending(), [])
+        await self.send_chunk(studio, 0, 1, b'new')
+        new_model = await self.finish_source(studio)
+        self.assertTrue(new_model.is_relative_to(custom))
+        self.assertEqual(new_model.read_bytes(), b'new')
+        restarted = Relay(inbox=load_inbox(settings))
+        self.assertEqual(restarted.pending()[0][1], new_model)
+        await self.relay.change_inbox(self.inbox, lambda p: save_inbox(p, settings))
+        self.assertEqual(self.relay.pending()[0][1], old_model)
+
+    async def test_cache_change_rejects_active_transfer_and_failed_config(self):
+        studio = await self.peer()
+        await self.send_chunk(studio, 0, 2, b'first')
+        saved = []
+        with self.assertRaisesRegex(ValueError, 'current transfer to finish'):
+            await self.relay.change_inbox(self.inbox/'new', saved.append)
+        self.assertEqual(saved, [])
+        self.assertEqual(self.relay.inbox, self.inbox)
+        await self.send_chunk(studio, 1, 2, b'last')
+        model = await self.finish_source(studio)
+        self.assertEqual(model.read_bytes(), b'firstlast')
+        def denied(path):
+            raise PermissionError('configuration is read-only')
+        with self.assertRaises(PermissionError):
+            await self.relay.change_inbox(self.inbox/'new', denied)
+        self.assertEqual(self.relay.inbox, self.inbox)
+        with self.assertRaises(OSError):
+            await self.relay.change_inbox(model, saved.append)
+        self.assertEqual(self.relay.inbox, self.inbox)
+        async with self.relay.delivery_lock:
+            with self.assertRaisesRegex(ValueError, 'current transfer to finish'):
+                await self.relay.change_inbox(self.inbox/'new', saved.append)
+
+if __name__=='__main__': unittest.main()
