@@ -6,6 +6,7 @@ import errno
 import os
 import queue
 import socket
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -258,8 +259,14 @@ class App(BridgeWindow):
     def open_inbox(self):
         try:
             self.runtime.inbox.mkdir(parents=True, exist_ok=True)
-            os.startfile(self.runtime.inbox)
-        except OSError as exc:
+            folder = str(self.runtime.inbox)
+            if sys.platform == 'win32':
+                os.startfile(folder)
+            elif sys.platform == 'darwin':
+                subprocess.run(['open', folder], check=True)
+            else:
+                subprocess.run(['xdg-open', folder], check=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
             messagebox.showerror('Unable to Open Cache Folder', str(exc), parent=self)
 
     def choose_inbox(self):

@@ -28,7 +28,7 @@ Or start `dist/Tripo-Echo3D-Bridge.exe`. The target machine does not need Python
 
 ### Cache folder
 
-Received models go to `%LOCALAPPDATA%/Tripo/Echo3DBridge/received/`. Each model has its own directory, so identical file names do not overwrite each other. The chosen root is stored in `%LOCALAPPDATA%/Tripo/Echo3DBridge/settings.json`.
+Received models go to `%LOCALAPPDATA%/Tripo/Echo3DBridge/received/` on Windows, and to `~/Library/Application Support/Tripo/Echo3DBridge/received/` on macOS. Each model has its own directory, so identical file names do not overwrite each other. The chosen root is stored in `settings.json` in that same Tripo folder.
 
 In the window, expand **Local storage**, then use **Change…** to pick a writable folder. The change applies immediately and is kept across restarts. **Open folder** opens the current directory. The folder cannot be changed while a model is being saved or delivered. Files already on disk stay where they are.
 
@@ -69,10 +69,20 @@ Closing the desktop window releases port 60710.
 
 ## Package
 
+Windows, from this folder:
+
 ```powershell
 ./build.ps1
 ```
 
 The executable is `dist/Tripo-Echo3D-Bridge.exe`.
+
+macOS, on a Mac:
+
+```bash
+./build.sh
+```
+
+The app is `dist/Tripo-Echo3D-Bridge.app`, and a zip of that app is `dist/Tripo-Echo3D-Bridge-mac.zip`. A Windows machine cannot build this package. Run the script on macOS, or run the **Build macOS** workflow in GitHub Actions and download the artifact. The first launch may require right-click → Open, because the app is not notarized.
 
 Development check: `python -m unittest discover -s tests -v`. The listener binds both IPv4 and IPv6 loopback. `web/bridge-client.html` is an optional protocol tool on port 60710, not the Bridge window.
