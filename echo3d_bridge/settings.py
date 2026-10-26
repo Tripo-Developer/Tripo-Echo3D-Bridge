@@ -1,10 +1,20 @@
 """Per-user desktop settings, independent of the selected model directory."""
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
-APP_DATA = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'Tripo' / 'Echo3DBridge'
+
+def _app_data() -> Path:
+    if sys.platform == 'darwin':
+        base = Path.home() / 'Library' / 'Application Support'
+    else:
+        base = Path(os.environ.get('LOCALAPPDATA', str(Path.home())))
+    return base / 'Tripo' / 'Echo3DBridge'
+
+
+APP_DATA = _app_data()
 DEFAULT_INBOX = APP_DATA / 'received'
 SETTINGS_FILE = APP_DATA / 'settings.json'
 
