@@ -66,7 +66,6 @@ class ReleasePackageTests(unittest.TestCase):
             with zipfile.ZipFile(source, "w") as package:
                 package.writestr("Tripo-Echo3D-Bridge-macOS-arm64.dmg", b"arm")
                 package.writestr("Tripo-Echo3D-Bridge-macOS-x86_64.dmg", b"intel")
-                package.writestr("README.md", b"install")
             staged = self.release.stage_mac(source, tag, root / "out")
             self.assertEqual(staged.name, f"Tripo3d_echo3d_Bridge-mac-{tag}.zip")
             with zipfile.ZipFile(staged) as package:
@@ -75,9 +74,20 @@ class ReleasePackageTests(unittest.TestCase):
                     {
                         "Tripo-Echo3D-Bridge-macOS-arm64.dmg",
                         "Tripo-Echo3D-Bridge-macOS-x86_64.dmg",
-                        "README.md",
                     },
                 )
+
+    def test_stage_mac_rejects_a_readme(self):
+        tag = self.release.source_tag()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "incoming.zip"
+            with zipfile.ZipFile(source, "w") as package:
+                package.writestr("Tripo-Echo3D-Bridge-macOS-arm64.dmg", b"arm")
+                package.writestr("Tripo-Echo3D-Bridge-macOS-x86_64.dmg", b"intel")
+                package.writestr("README.md", b"install")
+            with self.assertRaises(ValueError):
+                self.release.stage_mac(source, tag, root / "out")
 
     def test_macos_package_follows_the_disk_image_layout(self):
         root = Path(__file__).resolve().parents[1]
@@ -92,6 +102,7 @@ class ReleasePackageTests(unittest.TestCase):
         self.assertIn("macos-15-intel", workflow)
         self.assertIn("Tripo-Echo3D-Bridge-macOS-arm64.dmg", workflow)
         self.assertIn("Tripo-Echo3D-Bridge-macOS-x86_64.dmg", workflow)
+        self.assertNotIn("README.md", workflow)
 
     def test_stage_mac_rejects_a_windows_package(self):
         tag = self.release.source_tag()

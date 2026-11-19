@@ -18,7 +18,6 @@ MAC_DMGS = (
     f"{MAC_APP}-macOS-arm64.dmg",
     f"{MAC_APP}-macOS-x86_64.dmg",
 )
-MAC_README = "README.md"
 sys.path.insert(0, str(ROOT))
 
 from echo3d_bridge import auto_update as update  # noqa: E402
@@ -90,9 +89,9 @@ def _require_mac_package(archive):
         if package.testzip() is not None:
             raise ValueError("Package CRC check failed")
         names = {name.rstrip("/") for name in package.namelist() if name.rstrip("/")}
-        for name in (*MAC_DMGS, MAC_README):
-            if name not in names:
-                raise ValueError(f"mac package is missing {name}")
+        if names != set(MAC_DMGS):
+            raise ValueError(f"mac package must contain only the two disk images, got {sorted(names)}")
+        for name in MAC_DMGS:
             if package.getinfo(name).file_size <= 0:
                 raise ValueError(f"mac package entry is empty: {name}")
     return archive

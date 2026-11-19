@@ -265,24 +265,11 @@ jobs:
           test "$(stat -c%s "$intel")" -gt 1000000
           mkdir -p dist/cdn-macos release-assets
           cp "$arm" "$intel" dist/cdn-macos/
-          python3 - <<'PY'
-          from pathlib import Path
-          Path("dist/cdn-macos/README.md").write_text(
-              "# Tripo Echo3D Bridge for macOS\n\n"
-              "Open the disk image for this Mac:\n\n"
-              "- Apple silicon: Tripo-Echo3D-Bridge-macOS-arm64.dmg\n"
-              "- Intel: Tripo-Echo3D-Bridge-macOS-x86_64.dmg\n\n"
-              "Drag Tripo Echo3D Bridge to Applications. The first launch may require "
-              "Control-click and then Open, because the app is not notarized.\n",
-              encoding="utf-8",
-          )
-          PY
           (
             cd dist/cdn-macos
             zip -q -r -y "../../release-assets/Tripo3d_echo3d_Bridge-mac-${RELEASE_TAG}.zip" \
               Tripo-Echo3D-Bridge-macOS-arm64.dmg \
-              Tripo-Echo3D-Bridge-macOS-x86_64.dmg \
-              README.md
+              Tripo-Echo3D-Bridge-macOS-x86_64.dmg
           )
           python3 .github/scripts/release_package.py stage-mac \
             --archive "release-assets/Tripo3d_echo3d_Bridge-mac-${RELEASE_TAG}.zip"
