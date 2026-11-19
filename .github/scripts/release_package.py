@@ -16,7 +16,6 @@ PACKAGE = "Tripo3d_echo3d_Bridge"
 MAC_APP = "Tripo-Echo3D-Bridge"
 MAC_DMGS = (
     f"{MAC_APP}-macOS-arm64.dmg",
-    f"{MAC_APP}-macOS-x86_64.dmg",
 )
 sys.path.insert(0, str(ROOT))
 
@@ -90,7 +89,7 @@ def _require_mac_package(archive):
             raise ValueError("Package CRC check failed")
         names = {name.rstrip("/") for name in package.namelist() if name.rstrip("/")}
         if names != set(MAC_DMGS):
-            raise ValueError(f"mac package must contain only the two disk images, got {sorted(names)}")
+            raise ValueError(f"mac package must contain only the Apple silicon disk image, got {sorted(names)}")
         for name in MAC_DMGS:
             if package.getinfo(name).file_size <= 0:
                 raise ValueError(f"mac package entry is empty: {name}")

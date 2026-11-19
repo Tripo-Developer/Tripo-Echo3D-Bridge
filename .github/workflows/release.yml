@@ -1,6 +1,6 @@
 # Manually publish Echo3D Bridge packages for Windows and macOS.
 # The Windows zip contains only Tripo-Echo3D-Bridge.exe and version.txt, which the app installs as an update.
-# macOS builds arm64 and x86_64 disk images, then packs them into one zip. That zip is not an automatic update.
+# macOS builds one Apple silicon disk image on macOS 15. Intel Macs are not supported. That zip is not an automatic update.
 
 name: Publish Release
 
@@ -140,25 +140,17 @@ jobs:
           if-no-files-found: error
 
   build-macos:
-    name: Build macOS ${{ matrix.arch }}
+    name: Build macOS
     needs: verify
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            arch: arm64
-          - runner: macos-15-intel
-            arch: x86_64
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.verify.outputs.sha }}
       - name: Install Python with Tk
         run: brew install python@3.11
-      - name: Verify runner architecture
-        run: test "$(uname -m)" = "${{ matrix.arch }}"
+      - name: Verify Apple silicon
+        run: test "$(uname -m)" = "arm64"
       - name: Build app and disk image
         run: |
           set -euo pipefail
@@ -221,10 +213,10 @@ jobs:
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: echo3d-release-macos-${{ matrix.arch }}
+          name: echo3d-release-macos
           path: |
-            dist/Tripo-Echo3D-Bridge-macOS-${{ matrix.arch }}.zip
-            dist/Tripo-Echo3D-Bridge-macOS-${{ matrix.arch }}.dmg
+            dist/Tripo-Echo3D-Bridge-macOS-arm64.zip
+            dist/Tripo-Echo3D-Bridge-macOS-arm64.dmg
           if-no-files-found: error
           compression-level: 0
 
@@ -246,7 +238,7 @@ jobs:
       - name: Download macOS packages
         uses: actions/download-artifact@v4
         with:
-          pattern: echo3d-release-macos-*
+          name: echo3d-release-macos
           path: artifacts/macos
       - name: Assemble macOS release zip
         env:
@@ -254,18 +246,14 @@ jobs:
         run: |
           set -euo pipefail
           arm=$(find artifacts/macos -type f -name 'Tripo-Echo3D-Bridge-macOS-arm64.dmg' -print -quit)
-          intel=$(find artifacts/macos -type f -name 'Tripo-Echo3D-Bridge-macOS-x86_64.dmg' -print -quit)
           test -n "$arm"
-          test -n "$intel"
           test "$(stat -c%s "$arm")" -gt 1000000
-          test "$(stat -c%s "$intel")" -gt 1000000
           mkdir -p dist/cdn-macos release-assets
-          cp "$arm" "$intel" dist/cdn-macos/
+          cp "$arm" dist/cdn-macos/
           (
             cd dist/cdn-macos
             zip -q -r -y "../../release-assets/Tripo3d_echo3d_Bridge-mac-${RELEASE_TAG}.zip" \
-              Tripo-Echo3D-Bridge-macOS-arm64.dmg \
-              Tripo-Echo3D-Bridge-macOS-x86_64.dmg
+              Tripo-Echo3D-Bridge-macOS-arm64.dmg
           )
           python3 .github/scripts/release_package.py stage-mac \
             --archive "release-assets/Tripo3d_echo3d_Bridge-mac-${RELEASE_TAG}.zip"

@@ -25,6 +25,10 @@ fi
 
 name="Tripo-Echo3D-Bridge"
 arch="$(uname -m)"
+if [[ "$arch" != "arm64" ]]; then
+  echo "macOS packages support Apple silicon on a current macOS only." >&2
+  exit 1
+fi
 app="$root/dist/$name.app"
 archive="$root/dist/${name}-macOS-${arch}.zip"
 dmg="$root/dist/${name}-macOS-${arch}.dmg"

@@ -58,24 +58,17 @@ class ReleasePackageTests(unittest.TestCase):
         self.assertEqual(manifest["packages"]["default"]["url"], url)
         self.assertEqual(len(manifest["packages"]["default"]["sha256"]), 64)
 
-    def test_stage_mac_keeps_both_disk_images(self):
+    def test_stage_mac_keeps_the_apple_silicon_disk_image(self):
         tag = self.release.source_tag()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "incoming.zip"
             with zipfile.ZipFile(source, "w") as package:
                 package.writestr("Tripo-Echo3D-Bridge-macOS-arm64.dmg", b"arm")
-                package.writestr("Tripo-Echo3D-Bridge-macOS-x86_64.dmg", b"intel")
             staged = self.release.stage_mac(source, tag, root / "out")
             self.assertEqual(staged.name, f"Tripo3d_echo3d_Bridge-mac-{tag}.zip")
             with zipfile.ZipFile(staged) as package:
-                self.assertEqual(
-                    set(package.namelist()),
-                    {
-                        "Tripo-Echo3D-Bridge-macOS-arm64.dmg",
-                        "Tripo-Echo3D-Bridge-macOS-x86_64.dmg",
-                    },
-                )
+                self.assertEqual(set(package.namelist()), {"Tripo-Echo3D-Bridge-macOS-arm64.dmg"})
 
     def test_stage_mac_rejects_a_readme(self):
         tag = self.release.source_tag()
@@ -84,7 +77,6 @@ class ReleasePackageTests(unittest.TestCase):
             source = root / "incoming.zip"
             with zipfile.ZipFile(source, "w") as package:
                 package.writestr("Tripo-Echo3D-Bridge-macOS-arm64.dmg", b"arm")
-                package.writestr("Tripo-Echo3D-Bridge-macOS-x86_64.dmg", b"intel")
                 package.writestr("README.md", b"install")
             with self.assertRaises(ValueError):
                 self.release.stage_mac(source, tag, root / "out")
@@ -99,9 +91,11 @@ class ReleasePackageTests(unittest.TestCase):
         self.assertIn('ln -s /Applications', script)
         self.assertIn('${name}-macOS-${arch}.dmg', script)
         self.assertIn('volume_name="Tripo Echo3D Bridge"', script)
-        self.assertIn("macos-15-intel", workflow)
+        self.assertIn('"$arch" != "arm64"', script)
+        self.assertIn("runs-on: macos-15", workflow)
+        self.assertNotIn("macos-15-intel", workflow)
         self.assertIn("Tripo-Echo3D-Bridge-macOS-arm64.dmg", workflow)
-        self.assertIn("Tripo-Echo3D-Bridge-macOS-x86_64.dmg", workflow)
+        self.assertNotIn("x86_64", workflow)
         self.assertNotIn("README.md", workflow)
 
     def test_stage_mac_rejects_a_windows_package(self):

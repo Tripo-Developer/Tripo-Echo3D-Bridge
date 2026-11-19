@@ -2,7 +2,7 @@ name: Upload Release
 
 # Store the Feishu webhook in the FEISHU_WEBHOOK_TOKEN secret, as a full URL or as the token after hook/.
 # Upload the Windows and macOS packages. manifest.json and the Windows latest zip are the automatic update.
-# The macOS zip contains both architecture disk images and is published as Tripo3d_echo3d_Bridge-mac-latest.zip. There is no domestic package.
+# The macOS zip contains the Apple silicon disk image and is published as Tripo3d_echo3d_Bridge-mac-latest.zip. There is no domestic package.
 
 on:
   workflow_dispatch:
