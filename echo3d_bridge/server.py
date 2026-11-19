@@ -203,9 +203,14 @@ class Relay:
         for path in sorted(self.inbox.glob('*/metadata.json'),key=lambda p:p.stat().st_mtime):
             try:
                 meta=json.loads(path.read_text(encoding='utf-8'))
-                folder = path.parent.resolve(strict=False)
-                model = (folder / meta['storedName']).resolve(strict=False)
-                if model.parent != folder or not model.is_file(): continue
+                name = meta.get('storedName')
+                # Compare the file name only. Resolving the folder and the file
+                # separately can disagree on Windows between RUNNER~1 and the long name.
+                if not isinstance(name, str) or name != Path(name).name or name in {'.', '..'}:
+                    continue
+                folder = path.parent
+                model = folder / name
+                if not model.is_file(): continue
                 if not meta.get('delivered'): items.append((folder, model, meta))
             except (OSError,ValueError,KeyError,TypeError): continue
         return items

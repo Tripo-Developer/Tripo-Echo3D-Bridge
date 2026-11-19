@@ -45,7 +45,9 @@ class Ledger:
             self.db.execute('INSERT OR REPLACE INTO receipts VALUES (?,?,?,?,?)', (scope, delivery, sha, state, entry))
 
     def close(self):
-        self.db.close()
+        if self.db is not None:
+            self.db.close()
+            self.db = None
 
 
 def validate_glb(path):

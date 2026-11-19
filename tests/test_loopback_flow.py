@@ -44,26 +44,34 @@ class LoopbackFlowTest(unittest.IsolatedAsyncioTestCase):
                 server=await serve(relay.handle,'127.0.0.1',0,max_size=MAX_MESSAGE_BYTES,compression=None)
                 url='ws://127.0.0.1:'+str(server.sockets[0].getsockname()[1])+'/echo3d'
                 output=io.StringIO()
-                with patch.object(cr,'API_URL','http://127.0.0.1:'+str(http.server_port)+'/upload'),contextlib.redirect_stdout(output):
-                    task=asyncio.create_task(cr.Receiver(ledger,'scope',{'key':'secret-test'}).run(url))
-                    for _ in range(400):
-                        if any(json.loads(m.read_text())['delivered'] for m in metas):break
-                        await asyncio.sleep(.01)
-                    self.assertEqual(sorted(json.loads(m.read_text())['delivered'] for m in metas),[False,True])
-                    server.close();await server.wait_closed();await task
-                self.assertEqual(sorted(ledger.get('scope',str(i))[1] for i in range(2)),['accepted','uncertain'])
-                self.assertEqual([ledger.get('scope',str(i))[2] for i in range(2) if ledger.get('scope',str(i))[1]=='accepted'],['loopback-accepted'])
-                self.assertEqual(len(requests),2)
-                self.assertIn('Duplicate content',output.getvalue())
-                self.assertNotIn('secret-test',output.getvalue())
-                # The Bridge panel/log line is the emitted delivery event message.
-                deliveries=[p for e,p in events if e=='delivery']
-                self.assertEqual([p['success'] for p in deliveries],[False,True])
-                self.assertIn('Delivery failed:',deliveries[0]['message'])
-                self.assertIn('Duplicate content',deliveries[0]['message'])
-                self.assertNotIn('secret-test',deliveries[0]['message'])
-                self.assertNotIn('Upload not confirmed; inspect receiver terminal',deliveries[0]['message'])
-                self.assertTrue(all((m.parent/'model-test.glb').exists() for m in metas))
-                ledger.close()
+                task=None
+                try:
+                    with patch.object(cr,'API_URL','http://127.0.0.1:'+str(http.server_port)+'/upload'),contextlib.redirect_stdout(output):
+                        task=asyncio.create_task(cr.Receiver(ledger,'scope',{'key':'secret-test'}).run(url))
+                        for _ in range(400):
+                            if any(json.loads(m.read_text())['delivered'] for m in metas):break
+                            await asyncio.sleep(.01)
+                        self.assertEqual(sorted(json.loads(m.read_text())['delivered'] for m in metas),[False,True])
+                        server.close();await server.wait_closed();await task
+                        task=None
+                    self.assertEqual(sorted(ledger.get('scope',str(i))[1] for i in range(2)),['accepted','uncertain'])
+                    self.assertEqual([ledger.get('scope',str(i))[2] for i in range(2) if ledger.get('scope',str(i))[1]=='accepted'],['loopback-accepted'])
+                    self.assertEqual(len(requests),2)
+                    self.assertIn('Duplicate content',output.getvalue())
+                    self.assertNotIn('secret-test',output.getvalue())
+                    # The Bridge panel/log line is the emitted delivery event message.
+                    deliveries=[p for e,p in events if e=='delivery']
+                    self.assertEqual([p['success'] for p in deliveries],[False,True])
+                    self.assertIn('Delivery failed:',deliveries[0]['message'])
+                    self.assertIn('Duplicate content',deliveries[0]['message'])
+                    self.assertNotIn('secret-test',deliveries[0]['message'])
+                    self.assertNotIn('Upload not confirmed; inspect receiver terminal',deliveries[0]['message'])
+                    self.assertTrue(all((m.parent/'model-test.glb').exists() for m in metas))
+                finally:
+                    if task is not None:
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                    server.close();await server.wait_closed()
+                    ledger.close()
         finally:
             http.shutdown();thread.join();http.server_close()
