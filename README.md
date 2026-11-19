@@ -77,6 +77,8 @@ Windows, from this folder:
 
 The executable is `dist/Tripo-Echo3D-Bridge.exe`.
 
+The packaged Windows app checks `https://tripo-public.tripo3d.ai/plugins/echo3d-bridge/manifest.json` once a day (a domestic build uses the `assets.cdn.tripo3d.com` channel). If that manifest is missing, it reads the version from `https://tripo-public.tripo3d.ai/plugins/echo3d-bridge/Tripo3d_echo3d_Bridge-latest.zip`. The footer button checks again on click. When a newer package for the same channel is available, a second click downloads the zip, checks its SHA-256, and replaces this executable after the window closes. The zip contains `Tripo-Echo3D-Bridge.exe` and `version.txt` (`__version__ = "x.y.z"`). `TRIPO_UPDATE_CHECK=0` turns the check off. Running `python desktop_main.py` only reports the new version; it does not replace the source tree.
+
 macOS, on a Mac:
 
 ```bash

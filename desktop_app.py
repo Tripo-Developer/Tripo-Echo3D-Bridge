@@ -15,13 +15,17 @@ from pathlib import Path
 from contextlib import AsyncExitStack
 from datetime import datetime
 from tkinter import filedialog, messagebox
-from desktop_ui import BridgeWindow
+from desktop_ui import GREEN, MUTED, RED, TEXT, BridgeWindow
 
 from cloud_receiver import Ledger, Receiver, collection_scope
+from echo3d_bridge import __version__
+from echo3d_bridge.auto_update import Updater, packaged_executable, update_display
 from echo3d_bridge.server import Relay, serve, PORT, MAX_MESSAGE_BYTES, DEFAULT_INBOX
-from echo3d_bridge.settings import APP_DATA, load_inbox, save_inbox, validate_inbox
+from echo3d_bridge.settings import APP_DATA, clear_cached_transfers, load_inbox, save_inbox, validate_inbox
 
 HOST = "127.0.0.1"
+STUDIO_URL = "https://studio.tripo3d.ai/workspace/generate"
+ECHO3D_URL = "https://www.echo3d.com"
 ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
 WEB_DIR = ROOT / 'web'
 
@@ -149,6 +153,22 @@ class RelayRuntime:
                     self._emit('cache_error', {'message': str(exc)})
             threading.Thread(target=save_for_restart, daemon=True).start()
 
+    def clear_cache(self):
+        """Remove finished transfer folders. An in-progress transfer is kept."""
+        if self.loop.is_running() and self.relay is not None:
+            asyncio.run_coroutine_threadsafe(self._clear_cache(), self.loop)
+            return
+        self._emit('cache_cleared', {'removed': clear_cached_transfers(self.inbox)})
+
+    async def _clear_cache(self):
+        protected = []
+        if self.relay.transfer is not None:
+            protected.append(self.relay.transfer.folder)
+        if self.relay.delivery_lock.locked():
+            protected.extend(folder for folder, _model, _meta in await asyncio.to_thread(self.relay.pending))
+        removed = await asyncio.to_thread(clear_cached_transfers, self.inbox, protected)
+        self._emit('cache_cleared', {'removed': removed})
+
     def cloud_active(self):
         with self._cloud_lock:
             return self._cloud_starting or (self._cloud_task is not None and not self._cloud_task.done())
@@ -266,19 +286,25 @@ class App(BridgeWindow):
         self.runtime = RelayRuntime(self.events, inbox)
         self.connected = {"studio": False, "echo3d": False}
         self.demo_ready = False
+        self._restarting = False
+        self._update_checked = False
+        self._update_seen = None
+        self.updater = Updater(__version__, APP_DATA / 'updates',
+                               is_busy=self._update_busy, on_restart=self._restart_for_update)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self._build_ui()
-        self._log(f'Local connection · port {PORT}')
+        self.show_update(self._update_display())
+        self._log(f'Server running on port: {PORT}')
         if settings_error:
             self._log(settings_error)
         self.runtime.start()
         self.after(100, self._drain_events)
 
     def open_studio(self):
-        if not self.demo_ready:
-            self._log('Tripo Studio client is available once the bridge is running.')
-            return
-        webbrowser.open(f'http://{HOST}:{PORT}/bridge-client.html')
+        webbrowser.open(STUDIO_URL)
+
+    def open_echo3d_site(self):
+        webbrowser.open(ECHO3D_URL)
 
     def open_echo3d(self):
         if not self.demo_ready:
@@ -307,6 +333,9 @@ class App(BridgeWindow):
                     self.demo_ready = True
                     self.change_cache_btn.configure(state='normal')
                     self._log("Bridge started.")
+                    if not self._update_checked:
+                        self._update_checked = True
+                        self.updater.start_check(manual=False)
                 elif event == 'port_in_use':
                     self.demo_ready = False
                     self.change_cache_btn.configure(state='normal')
@@ -316,9 +345,9 @@ class App(BridgeWindow):
                     self.change_cache_btn.configure(state='normal')
                     self.demo_ready = False
                     self.show_service(False)
-                    self.phase_label.configure(text='', text_color='#F2F3F4')
+                    self.phase_label.configure(text='', text_color=TEXT)
                     self.transfer_var.set(payload['message'] or 'Bridge could not start')
-                    self.transfer_label.configure(text_color='#F38B88')
+                    self.transfer_label.configure(text_color=RED)
                     self.transfer_hint.configure(text='Check Logs for details. Correct the problem, then restart Bridge.')
                     self._log(f"Error: {payload['message']}")
                     messagebox.showerror("Echo3D Bridge", payload["message"])
@@ -329,6 +358,8 @@ class App(BridgeWindow):
                     if payload.get('restart'):
                         self.status_var.set('  Restart required')
                         self.transfer_hint.configure(text='Cache settings updated. Restart Bridge to apply.')
+                elif event == 'cache_cleared':
+                    self._log(f"Cache clear removed {payload.get('removed', 0)} folder(s).")
                 elif event == 'cache_error':
                     self.change_cache_btn.configure(state='normal')
                     self._log('Cache folder unchanged: ' + payload['message'])
@@ -353,18 +384,94 @@ class App(BridgeWindow):
                     messagebox.showerror('echo3D', message, parent=self)
         except queue.Empty:
             pass
+        self._poll_update()
+        if self._restarting:
+            self.close()
+            return
         self.after(100, self._drain_events)
+
+    def _update_block_reason(self):
+        if self._transfer_active:
+            return 'transfer'
+        if self.connected.get('studio') or self.connected.get('echo3d') or self.runtime.cloud_active():
+            return 'Disconnect Tripo Studio and echo3D before updating'
+        return ''
+
+    def _update_busy(self):
+        return bool(self._update_block_reason())
+
+    def _update_display(self):
+        reason = self._update_block_reason()
+        return update_display(status=self.updater.status, state=self.updater.state, notice=self.updater.notice,
+                              update_ready=self.updater.update_ready,
+                              transferring=reason == 'transfer',
+                              blocked='' if reason in ('', 'transfer') else reason,
+                              can_install=packaged_executable() is not None)
+
+    def _update_snapshot(self):
+        return (self.updater.status.get('checking'), self.updater.status.get('disabled'),
+                self.updater.state.get('phase'), self.updater.notice.get('available'),
+                self.updater.notice.get('latest'), self.updater.notice.get('error'),
+                self.updater.state.get('error'), self.updater.status.get('checked'))
+
+    def _poll_update(self):
+        before = self._update_seen
+        self.updater.poll()
+        self.show_update(self._update_display())
+        after = self._update_snapshot()
+        if after != before:
+            self._log_update_change(after)
+            self._update_seen = after
+
+    def _log_update_change(self, snapshot):
+        checking, disabled, phase, available, latest, error, install_error, checked = snapshot
+        if phase == 'failed' and install_error:
+            self._log('Update failed: ' + install_error)
+        elif phase == 'installed':
+            self._log('Installed %s. Restarting.' % (latest or ''))
+        elif phase == 'downloading':
+            self._log('Downloading update.')
+        elif error:
+            self._log('Could not check for updates: ' + error)
+        elif available:
+            self._log('New version %s is available.' % latest)
+        elif disabled or not checked or checking:
+            return
+        else:
+            self._log('Echo3D Bridge is on the latest version.')
+
+    def _on_update(self):
+        """First click checks. A second click installs that release on the packaged app."""
+        if self._update_display().busy:
+            return
+        if self.updater.update_ready:
+            if packaged_executable() is None:
+                self._log('This window is running from source. The packaged Windows app installs the update and restarts.')
+                return
+            if self.updater.notice.get('auto_install'):
+                self.updater.start_install()
+            else:
+                self._log('This release requires a manual download.')
+        else:
+            self.updater.request_check()
+        self.show_update(self._update_display())
+
+    def _restart_for_update(self):
+        self._restarting = True
 
     def _set_peer(self, role: str, connected: bool):
         if self.connected[role] != connected:
             self._log(f"{role} {'Connected' if connected else 'disconnected'}")
         self.connected[role] = connected
-        self.peer_labels[role].configure(text='●  Connected' if connected else '○  Not connected',
-                                         text_color='#7ED5AD' if connected else '#A6ADB5')
+        text = 'Connected' if connected else 'Not connected'
+        self.peer_labels[role].configure(text=text, text_color=GREEN if connected else MUTED)
+        if role == 'echo3d':
+            self.note_echo3d(connected)
+        self._apply_connection_headline()
 
     def _log(self, text: str):
         self.log.configure(state="normal")
-        self.log.insert("end", datetime.now().strftime("%H:%M:%S ") + text + "\n")
+        self.log.insert("end", datetime.now().strftime("[%H:%M:%S] ") + text + "\n")
         lines = int(self.log.index("end-1c").split(".")[0])
         if lines > 200:
             self.log.delete("1.0", f"{lines - 200}.0")
@@ -372,6 +479,8 @@ class App(BridgeWindow):
         self.log.configure(state="disabled")
 
     def close(self):
+        if not self._restarting:
+            self.updater.shutdown()
         self.runtime.stop()
         self.destroy()
 
@@ -394,6 +503,15 @@ class App(BridgeWindow):
         if selected:
             self.change_cache_btn.configure(state='disabled')
             self.runtime.change_inbox(Path(selected))
+
+    def clear_cache(self):
+        if not messagebox.askyesno(
+                'Clear cache',
+                'Clear cached transfers?\n\nFolders still used by a transfer in progress are kept. '
+                'The cache directory itself stays.',
+                parent=self):
+            return
+        self.runtime.clear_cache()
 
 
 if __name__ == "__main__":
