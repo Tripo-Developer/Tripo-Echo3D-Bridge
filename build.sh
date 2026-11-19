@@ -17,7 +17,7 @@ for candidate in python3 python3.11 python3.12 python; do
   fi
 done
 if [[ -z "$py" ]]; then
-  echo "Need a Python that includes tkinter. Install Homebrew python@3.11, or the python.org macOS installer." >&2
+  echo "Need a Python that includes tkinter. Run brew install python@3.11 python-tk@3.11, or use the python.org macOS installer." >&2
   exit 1
 fi
 

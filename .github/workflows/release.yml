@@ -148,7 +148,7 @@ jobs:
         with:
           ref: ${{ needs.verify.outputs.sha }}
       - name: Install Python with Tk
-        run: brew install python@3.11
+        run: brew install python@3.11 python-tk@3.11
       - name: Verify Apple silicon
         run: test "$(uname -m)" = "arm64"
       - name: Build app and disk image
