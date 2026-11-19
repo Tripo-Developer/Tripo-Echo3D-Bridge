@@ -203,9 +203,10 @@ class Relay:
         for path in sorted(self.inbox.glob('*/metadata.json'),key=lambda p:p.stat().st_mtime):
             try:
                 meta=json.loads(path.read_text(encoding='utf-8'))
-                model=(path.parent/meta['storedName']).resolve()
-                if model.parent != path.parent.resolve() or not model.is_file(): continue
-                if not meta.get('delivered'): items.append((path.parent,model,meta))
+                folder = path.parent.resolve(strict=False)
+                model = (folder / meta['storedName']).resolve(strict=False)
+                if model.parent != folder or not model.is_file(): continue
+                if not meta.get('delivered'): items.append((folder, model, meta))
             except (OSError,ValueError,KeyError,TypeError): continue
         return items
 

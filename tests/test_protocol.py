@@ -17,7 +17,7 @@ def envelope(kind, **payload):
 class ProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.inbox = Path(self.temp.name)
+        self.inbox = Path(self.temp.name).resolve()
         self.events = []
         self.relay = Relay(inbox=self.inbox, receipt_timeout=0.5,
                            event_sink=lambda event,p:self.events.append((event,p)))
@@ -110,7 +110,7 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         studio=await self.peer()
         await self.send_chunk(studio,0,1,b'glTF',name='../../CON.glb')
         path=await self.finish_source(studio)
-        self.assertTrue(path.is_relative_to(self.inbox));self.assertEqual(path.read_bytes(),b'glTF')
+        self.assertTrue(path.resolve().is_relative_to(self.inbox));self.assertEqual(path.read_bytes(),b'glTF')
 
     async def test_disk_error_never_sends_success_ack(self):
         studio=await self.peer()
@@ -137,7 +137,7 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.relay.pending(), [])
         await self.send_chunk(studio, 0, 1, b'new')
         new_model = await self.finish_source(studio)
-        self.assertTrue(new_model.is_relative_to(custom))
+        self.assertTrue(new_model.resolve().is_relative_to(custom.resolve()))
         self.assertEqual(new_model.read_bytes(), b'new')
         restarted = Relay(inbox=load_inbox(settings))
         self.assertEqual(restarted.pending()[0][1], new_model)
@@ -151,7 +151,7 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, 'current transfer to finish'):
             await self.relay.change_inbox(self.inbox/'new', saved.append)
         self.assertEqual(saved, [])
-        self.assertEqual(self.relay.inbox, self.inbox)
+        self.assertEqual(self.relay.inbox, self.inbox.resolve())
         await self.send_chunk(studio, 1, 2, b'last')
         model = await self.finish_source(studio)
         self.assertEqual(model.read_bytes(), b'firstlast')
@@ -159,10 +159,10 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
             raise PermissionError('configuration is read-only')
         with self.assertRaises(PermissionError):
             await self.relay.change_inbox(self.inbox/'new', denied)
-        self.assertEqual(self.relay.inbox, self.inbox)
+        self.assertEqual(self.relay.inbox, self.inbox.resolve())
         with self.assertRaises(OSError):
             await self.relay.change_inbox(model, saved.append)
-        self.assertEqual(self.relay.inbox, self.inbox)
+        self.assertEqual(self.relay.inbox, self.inbox.resolve())
         async with self.relay.delivery_lock:
             with self.assertRaisesRegex(ValueError, 'current transfer to finish'):
                 await self.relay.change_inbox(self.inbox/'new', saved.append)

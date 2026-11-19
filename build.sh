@@ -21,7 +21,7 @@ if [[ -z "$py" ]]; then
   exit 1
 fi
 
-"$py" -m pip install --disable-pip-version-check -q -r "$root/requirements.txt" "pyinstaller>=6,<7" "pillow>=10,<12"
+"$py" -m pip install --disable-pip-version-check -q -r "$root/requirements.txt" "pyinstaller>=6,<7"
 
 name="Tripo-Echo3D-Bridge"
 arch="$(uname -m)"
