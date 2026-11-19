@@ -1,5 +1,6 @@
 """Native widget regression checks; require a desktop/display session."""
 import tempfile
+import gc
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -208,6 +209,8 @@ class DesktopTests(unittest.TestCase):
             finally:
                 app.runtime.loop.close()
                 app.destroy()
+                del app
+                gc.collect()
 
 
 class ScrollTests(unittest.TestCase):
@@ -246,6 +249,8 @@ class ScrollTests(unittest.TestCase):
             finally:
                 app.runtime.loop.close()
                 app.destroy()
+                del app
+                gc.collect()
 
 
 class CacheClearTests(unittest.TestCase):

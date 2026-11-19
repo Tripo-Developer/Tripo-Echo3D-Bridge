@@ -51,7 +51,9 @@ class LoopbackFlowTest(unittest.IsolatedAsyncioTestCase):
                         for _ in range(400):
                             if any(json.loads(m.read_text())['delivered'] for m in metas):break
                             await asyncio.sleep(.01)
-                        self.assertEqual(sorted(json.loads(m.read_text())['delivered'] for m in metas),[False,True])
+                        self.assertEqual(sorted(json.loads(m.read_text())['delivered'] for m in metas),[False,True],
+                                         f'Receiver output: {output.getvalue()}; events: {events}; '
+                                         f'requests: {len(requests)}; receiver task: {task}')
                         server.close();await server.wait_closed();await task
                         task=None
                     self.assertEqual(sorted(ledger.get('scope',str(i))[1] for i in range(2)),['accepted','uncertain'])
