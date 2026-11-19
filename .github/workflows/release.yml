@@ -1,6 +1,6 @@
-# 手动发布 Echo3D Bridge。Windows 和 macOS 一起打包。
-# Windows zip 只含 Tripo-Echo3D-Bridge.exe 和 version.txt，供应用自动更新安装。
-# macOS 按 Roblox 的方式打 arm64 和 x86_64 两个 DMG，再合成一个 zip。不参与自动更新。
+# Manually publish Echo3D Bridge packages for Windows and macOS.
+# The Windows zip contains only Tripo-Echo3D-Bridge.exe and version.txt, which the app installs as an update.
+# macOS builds arm64 and x86_64 disk images, then packs them into one zip. That zip is not an automatic update.
 
 name: Publish Release
 
@@ -8,22 +8,22 @@ on:
   workflow_dispatch:
     inputs:
       published_version:
-        description: 已发布标签（带 v，没有则填无）
+        description: Latest published tag, with a v. Enter none when nothing is published.
         required: true
         type: string
         default: "v1.1.0"
       source_version:
-        description: 源码版本（不带 v）
+        description: Source version, without a v.
         required: true
         type: string
         default: "1.1.0"
       release_version:
-        description: 本次标签（带 v，与源码版本相同）
+        description: Release tag, with a v. It must match the source version.
         required: true
         type: string
         default: "v1.1.0"
       confirm_replace:
-        description: 确认删除已有标签并覆盖 Release。没有这个标签时不用勾
+        description: Delete the existing tag and replace the Release. Leave this unchecked when the tag does not exist.
         required: true
         type: boolean
         default: false
@@ -66,34 +66,34 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           if [ "$FORM_SOURCE" != "$SOURCE" ]; then
-            echo "::error::源码版本应为 ${SOURCE}"
+            echo "::error::Source version must be ${SOURCE}"
             exit 1
           fi
           if [ "$FORM_RELEASE" != "$TAG" ]; then
-            echo "::error::本次标签应为 ${TAG}"
+            echo "::error::Release tag must be ${TAG}"
             exit 1
           fi
           CURRENT="$(gh release view --json tagName --jq .tagName 2>/dev/null || true)"
           if [ -z "$CURRENT" ]; then
-            CURRENT="无"
+            CURRENT="none"
           fi
           {
-            echo "## 版本"
+            echo "## Version"
             echo ""
-            echo "源码不带 v，标签带 v。\`${SOURCE}\` 与 \`${TAG}\` 是同一个版本。"
+            echo "The source version has no v. The tag does. \`${SOURCE}\` and \`${TAG}\` are the same version."
             echo ""
             echo "| | |"
             echo "| --- | --- |"
-            echo "| 已发布标签 | ${CURRENT} |"
-            echo "| 源码版本 | ${SOURCE} |"
-            echo "| 本次标签 | ${TAG} |"
+            echo "| Published tag | ${CURRENT} |"
+            echo "| Source version | ${SOURCE} |"
+            echo "| Release tag | ${TAG} |"
             if [ "$CURRENT" = "$TAG" ]; then
               echo ""
-              echo "已有 ${TAG}。未勾选确认时不会删除。"
+              echo "${TAG} already exists. It is kept unless replacement is confirmed."
             fi
             if [ "$FORM_PUBLISHED" != "$CURRENT" ]; then
               echo ""
-              echo "弹窗填的是 ${FORM_PUBLISHED}，实际已发布是 ${CURRENT}。"
+              echo "The form says ${FORM_PUBLISHED}. The published tag is ${CURRENT}."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Confirm replacing an existing tag
@@ -105,10 +105,10 @@ jobs:
           python .github/scripts/release_package.py check
           if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null; then
             if [ "$CONFIRM_REPLACE" != "true" ]; then
-              echo "::error::已有标签 ${RELEASE_TAG}。要覆盖请勾选「确认删除已有标签并覆盖 Release」后重新运行。"
+              echo "::error::Tag ${RELEASE_TAG} already exists. Check replace and run again to overwrite it."
               exit 1
             fi
-            echo "已确认删除并覆盖 ${RELEASE_TAG}。" >> "$GITHUB_STEP_SUMMARY"
+            echo "Confirmed replacement of ${RELEASE_TAG}." >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Run non-desktop tests
         run: python -m unittest tests.test_auto_update tests.test_protocol tests.test_cloud_receiver tests.test_error_details tests.test_loopback_flow tests.test_release_package -v
@@ -294,7 +294,7 @@ jobs:
           set -euo pipefail
           if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null; then
             if [ "$CONFIRM_REPLACE" != "true" ]; then
-              echo "::error::已有标签 ${RELEASE_TAG}，未确认删除"
+              echo "::error::Tag ${RELEASE_TAG} already exists and replacement was not confirmed"
               exit 1
             fi
             echo "Replacing existing release $RELEASE_TAG"

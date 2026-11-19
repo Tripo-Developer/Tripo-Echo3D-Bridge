@@ -1,26 +1,26 @@
-# 飞书机器人通知。Secret 可以是完整 webhook，也可以只是 hook 后面的 token。
+# Feishu bot notification. The secret may be a full webhook URL or only the token after hook/.
 
 name: Feishu Notify
-description: 发送统一格式的飞书通知
+description: Send a Feishu card in a shared format
 
 inputs:
   webhook_token:
-    description: 飞书 webhook 完整地址，或 hook 后面的 token
+    description: Full Feishu webhook URL, or the token after hook/
     required: true
   title:
-    description: 通知标题
+    description: Notification title
     required: true
   description:
-    description: 通知正文，支持飞书 Markdown
+    description: Notification body. Feishu Markdown is supported.
     required: true
   link_text:
-    description: 按钮文字
+    description: Button label
     required: true
   link_url:
-    description: 按钮链接
+    description: Button link
     required: true
   status:
-    description: success、warning、error、info
+    description: success, warning, error, or info
     required: false
     default: info
 
@@ -39,7 +39,7 @@ runs:
       run: |
         set -euo pipefail
         if [ -z "${FEISHU_WEBHOOK_TOKEN}" ]; then
-          echo "::error::缺少 GitHub Secret FEISHU_WEBHOOK_TOKEN"
+          echo "::error::Missing GitHub secret FEISHU_WEBHOOK_TOKEN"
           exit 1
         fi
         case "$FEISHU_WEBHOOK_TOKEN" in
@@ -75,6 +75,6 @@ runs:
         echo "$RESPONSE"
         CODE=$(echo "$RESPONSE" | jq -r '.code // .StatusCode // 1')
         if [ "$CODE" != "0" ]; then
-          echo "::error::飞书通知失败"
+          echo "::error::Feishu notification failed"
           exit 1
         fi

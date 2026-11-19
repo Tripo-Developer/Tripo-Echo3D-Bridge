@@ -1,8 +1,8 @@
 name: Upload Release
 
-# Webhook 放在 GitHub Secret FEISHU_WEBHOOK_TOKEN，值为完整地址或 hook 后面的 token。
-# 上传 Windows 和 macOS 包。manifest.json 和 latest.zip 只指向 Windows 包，供自动更新使用。
-# macOS 包是两个架构的 DMG，另存为 Tripo3d_echo3d_Bridge-mac-latest.zip。没有国内包。
+# Store the Feishu webhook in the FEISHU_WEBHOOK_TOKEN secret, as a full URL or as the token after hook/.
+# Upload the Windows and macOS packages. manifest.json and the Windows latest zip are the automatic update.
+# The macOS zip contains both architecture disk images and is published as Tripo3d_echo3d_Bridge-mac-latest.zip. There is no domestic package.
 
 on:
   workflow_dispatch:
@@ -161,14 +161,14 @@ jobs:
         with:
           webhook_token: ${{ secrets.FEISHU_WEBHOOK_TOKEN }}
           status: success
-          title: "Tripo Echo3D Bridge ${{ inputs.release_tag }} 已上传"
+          title: "Tripo Echo3D Bridge ${{ inputs.release_tag }} uploaded"
           description: |
-            **版本**: ${{ inputs.release_tag }}
-            **S3**: 已上传
+            **Version**: ${{ inputs.release_tag }}
+            **S3**: uploaded
             **Windows**: https://tripo-public.tripo3d.ai/plugins/echo3d-bridge/Tripo3d_echo3d_Bridge-latest.zip
             **macOS**: https://tripo-public.tripo3d.ai/plugins/echo3d-bridge/Tripo3d_echo3d_Bridge-mac-latest.zip
 
-            **更新说明**
+            **Release notes**
             ${{ steps.release.outputs.body }}
-          link_text: 查看 GitHub Release
+          link_text: View GitHub Release
           link_url: ${{ steps.release.outputs.url }}
