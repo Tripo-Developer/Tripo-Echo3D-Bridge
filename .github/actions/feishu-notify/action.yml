@@ -1,0 +1,80 @@
+# 飞书机器人通知。Secret 可以是完整 webhook，也可以只是 hook 后面的 token。
+
+name: Feishu Notify
+description: 发送统一格式的飞书通知
+
+inputs:
+  webhook_token:
+    description: 飞书 webhook 完整地址，或 hook 后面的 token
+    required: true
+  title:
+    description: 通知标题
+    required: true
+  description:
+    description: 通知正文，支持飞书 Markdown
+    required: true
+  link_text:
+    description: 按钮文字
+    required: true
+  link_url:
+    description: 按钮链接
+    required: true
+  status:
+    description: success、warning、error、info
+    required: false
+    default: info
+
+runs:
+  using: composite
+  steps:
+    - name: Send Feishu notification
+      shell: bash
+      env:
+        FEISHU_WEBHOOK_TOKEN: ${{ inputs.webhook_token }}
+        FEISHU_TITLE: ${{ inputs.title }}
+        FEISHU_DESCRIPTION: ${{ inputs.description }}
+        FEISHU_LINK_TEXT: ${{ inputs.link_text }}
+        FEISHU_LINK_URL: ${{ inputs.link_url }}
+        FEISHU_STATUS: ${{ inputs.status }}
+      run: |
+        set -euo pipefail
+        if [ -z "${FEISHU_WEBHOOK_TOKEN}" ]; then
+          echo "::error::缺少 GitHub Secret FEISHU_WEBHOOK_TOKEN"
+          exit 1
+        fi
+        case "$FEISHU_WEBHOOK_TOKEN" in
+          https://*) WEBHOOK="$FEISHU_WEBHOOK_TOKEN" ;;
+          *) WEBHOOK="https://open.feishu.cn/open-apis/bot/v2/hook/${FEISHU_WEBHOOK_TOKEN}" ;;
+        esac
+        case "$FEISHU_STATUS" in
+          success) TEMPLATE="green" ;;
+          warning) TEMPLATE="orange" ;;
+          error) TEMPLATE="red" ;;
+          *) TEMPLATE="blue" ;;
+        esac
+        PAYLOAD=$(jq -n \
+          --arg title "$FEISHU_TITLE" \
+          --arg template "$TEMPLATE" \
+          --arg desc "$FEISHU_DESCRIPTION" \
+          --arg link_text "$FEISHU_LINK_TEXT" \
+          --arg link_url "$FEISHU_LINK_URL" \
+          '{
+            msg_type: "interactive",
+            card: {
+              header: {
+                title: {tag: "plain_text", content: $title},
+                template: $template
+              },
+              elements: [
+                {tag: "div", text: {tag: "lark_md", content: $desc}},
+                {tag: "action", actions: [{tag: "button", text: {tag: "plain_text", content: $link_text}, type: "primary", url: $link_url}]}
+              ]
+            }
+          }')
+        RESPONSE=$(curl -sS -X POST "$WEBHOOK" -H "Content-Type: application/json" -d "$PAYLOAD")
+        echo "$RESPONSE"
+        CODE=$(echo "$RESPONSE" | jq -r '.code // .StatusCode // 1')
+        if [ "$CODE" != "0" ]; then
+          echo "::error::飞书通知失败"
+          exit 1
+        fi

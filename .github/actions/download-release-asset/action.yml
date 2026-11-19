@@ -1,0 +1,39 @@
+name: 'Download Release Asset'
+description: 'Validate a release tag, resolve a GitHub release asset, and download it locally'
+
+inputs:
+  release_tag:
+    description: 'Release tag to download from, for example v1.1.0'
+    required: true
+  asset_name:
+    description: 'Exact release asset filename to download'
+    required: true
+  github_token:
+    description: 'GitHub token used to query the Releases API and download the asset'
+    required: true
+
+outputs:
+  zip_name:
+    description: 'Downloaded asset filename'
+    value: ${{ steps.download.outputs.zip_name }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Download release asset
+      id: download
+      shell: bash
+      env:
+        RELEASE_TAG: ${{ inputs.release_tag }}
+        ASSET_NAME: ${{ inputs.asset_name }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        set -euo pipefail
+        [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid stable release tag"; exit 1; }
+        export GH_TOKEN="$GITHUB_TOKEN"
+        gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease > release.json
+        python3 -c "import json; r=json.load(open('release.json')); assert not r['isDraft'] and not r['isPrerelease'], 'A published stable release is required'"
+        gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET_NAME"
+
+        echo "zip_name=${ASSET_NAME}" >> "$GITHUB_OUTPUT"
+        ls -lh "${ASSET_NAME}"

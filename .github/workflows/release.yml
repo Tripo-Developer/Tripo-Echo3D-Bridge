@@ -1,0 +1,310 @@
+# 手动发布 Echo3D Bridge。Windows 和 macOS 一起打包。
+# Windows zip 只含 Tripo-Echo3D-Bridge.exe 和 version.txt，供应用自动更新安装。
+# macOS 按 Roblox 的方式打 arm64 和 x86_64 两个 DMG，再合成一个 zip。不参与自动更新。
+
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      published_version:
+        description: 已发布标签（带 v，没有则填无）
+        required: true
+        type: string
+        default: "v1.1.0"
+      source_version:
+        description: 源码版本（不带 v）
+        required: true
+        type: string
+        default: "1.1.0"
+      release_version:
+        description: 本次标签（带 v，与源码版本相同）
+        required: true
+        type: string
+        default: "v1.1.0"
+      confirm_replace:
+        description: 确认删除已有标签并覆盖 Release。没有这个标签时不用勾
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify version and tests
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Show current and release versions
+        id: version
+        env:
+          FORM_PUBLISHED: ${{ inputs.published_version }}
+          FORM_SOURCE: ${{ inputs.source_version }}
+          FORM_RELEASE: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+          SOURCE="$(python .github/scripts/release_package.py version)"
+          TAG="$(python .github/scripts/release_package.py tag)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [ "$FORM_SOURCE" != "$SOURCE" ]; then
+            echo "::error::源码版本应为 ${SOURCE}"
+            exit 1
+          fi
+          if [ "$FORM_RELEASE" != "$TAG" ]; then
+            echo "::error::本次标签应为 ${TAG}"
+            exit 1
+          fi
+          CURRENT="$(gh release view --json tagName --jq .tagName 2>/dev/null || true)"
+          if [ -z "$CURRENT" ]; then
+            CURRENT="无"
+          fi
+          {
+            echo "## 版本"
+            echo ""
+            echo "源码不带 v，标签带 v。\`${SOURCE}\` 与 \`${TAG}\` 是同一个版本。"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| 已发布标签 | ${CURRENT} |"
+            echo "| 源码版本 | ${SOURCE} |"
+            echo "| 本次标签 | ${TAG} |"
+            if [ "$CURRENT" = "$TAG" ]; then
+              echo ""
+              echo "已有 ${TAG}。未勾选确认时不会删除。"
+            fi
+            if [ "$FORM_PUBLISHED" != "$CURRENT" ]; then
+              echo ""
+              echo "弹窗填的是 ${FORM_PUBLISHED}，实际已发布是 ${CURRENT}。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Confirm replacing an existing tag
+        env:
+          CONFIRM_REPLACE: ${{ inputs.confirm_replace }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python .github/scripts/release_package.py check
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null; then
+            if [ "$CONFIRM_REPLACE" != "true" ]; then
+              echo "::error::已有标签 ${RELEASE_TAG}。要覆盖请勾选「确认删除已有标签并覆盖 Release」后重新运行。"
+              exit 1
+            fi
+            echo "已确认删除并覆盖 ${RELEASE_TAG}。" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Run non-desktop tests
+        run: python -m unittest tests.test_auto_update tests.test_protocol tests.test_cloud_receiver tests.test_error_details tests.test_loopback_flow tests.test_release_package -v
+
+  build:
+    name: Build Windows package
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run desktop tests
+        run: python -m unittest tests.test_desktop_ui tests.test_desktop_runtime -v
+      - name: Build executable
+        shell: pwsh
+        run: ./build.ps1
+      - name: Package release zip
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+        run: python .github/scripts/release_package.py pack --exe dist/Tripo-Echo3D-Bridge.exe
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: echo3d-release-windows
+          path: release-assets/*.zip
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS ${{ matrix.arch }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+      - name: Install Python with Tk
+        run: brew install python@3.11
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
+      - name: Build app and disk image
+        run: |
+          set -euo pipefail
+          echo "$(brew --prefix python@3.11)/bin" >> "$GITHUB_PATH"
+          export PATH="$(brew --prefix python@3.11)/bin:$PATH"
+          python3.11 -c "import tkinter"
+          chmod +x build.sh
+          ./build.sh
+      - name: Smoke-test packaged app
+        run: |
+          set -euo pipefail
+          export PATH="$(brew --prefix python@3.11)/bin:$PATH"
+          executable="dist/Tripo-Echo3D-Bridge.app/Contents/MacOS/Tripo-Echo3D-Bridge"
+          file "$executable"
+          codesign --verify --deep --strict dist/Tripo-Echo3D-Bridge.app
+          "$executable" > /tmp/tripo-echo3d-bridge.log 2>&1 &
+          bridge_pid=$!
+          trap 'kill "$bridge_pid" 2>/dev/null || true' EXIT
+          if ! python3.11 - <<'PY'
+          import asyncio
+          import json
+          import socket
+          import time
+
+          from websockets.asyncio.client import connect
+
+          deadline = time.monotonic() + 30
+          while time.monotonic() < deadline:
+              try:
+                  with socket.create_connection(("127.0.0.1", 60710), 1):
+                      break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit("packaged app did not listen on 60710")
+
+          async def main():
+              async with connect("ws://127.0.0.1:60710/", origin="null") as socket:
+                  await socket.send(json.dumps({
+                      "type": "handshake",
+                      "payload": {
+                          "protocolVersion": "1.1.0",
+                          "clientName": "macOS package smoke test",
+                      },
+                  }))
+                  response = json.loads(await asyncio.wait_for(socket.recv(), 8))
+                  assert response["type"] == "handshake_ack", response
+                  assert response["payload"]["success"] is True
+
+          asyncio.run(main())
+          PY
+          then
+            echo "---- packaged app log ----"
+            cat /tmp/tripo-echo3d-bridge.log || true
+            exit 1
+          fi
+          kill "$bridge_pid" || true
+          wait "$bridge_pid" || true
+          trap - EXIT
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: echo3d-release-macos-${{ matrix.arch }}
+          path: |
+            dist/Tripo-Echo3D-Bridge-macOS-${{ matrix.arch }}.zip
+            dist/Tripo-Echo3D-Bridge-macOS-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    name: Publish GitHub Release
+    needs: [verify, build, build-macos]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+      - name: Download Windows package
+        uses: actions/download-artifact@v4
+        with:
+          name: echo3d-release-windows
+          path: release-assets
+      - name: Download macOS packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: echo3d-release-macos-*
+          path: artifacts/macos
+      - name: Assemble macOS release zip
+        env:
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          set -euo pipefail
+          arm=$(find artifacts/macos -type f -name 'Tripo-Echo3D-Bridge-macOS-arm64.dmg' -print -quit)
+          intel=$(find artifacts/macos -type f -name 'Tripo-Echo3D-Bridge-macOS-x86_64.dmg' -print -quit)
+          test -n "$arm"
+          test -n "$intel"
+          test "$(stat -c%s "$arm")" -gt 1000000
+          test "$(stat -c%s "$intel")" -gt 1000000
+          mkdir -p dist/cdn-macos release-assets
+          cp "$arm" "$intel" dist/cdn-macos/
+          python3 - <<'PY'
+          from pathlib import Path
+          Path("dist/cdn-macos/README.md").write_text(
+              "# Tripo Echo3D Bridge for macOS\n\n"
+              "Open the disk image for this Mac:\n\n"
+              "- Apple silicon: Tripo-Echo3D-Bridge-macOS-arm64.dmg\n"
+              "- Intel: Tripo-Echo3D-Bridge-macOS-x86_64.dmg\n\n"
+              "Drag Tripo Echo3D Bridge to Applications. The first launch may require "
+              "Control-click and then Open, because the app is not notarized.\n",
+              encoding="utf-8",
+          )
+          PY
+          (
+            cd dist/cdn-macos
+            zip -q -r -y "../../release-assets/Tripo3d_echo3d_Bridge-mac-${RELEASE_TAG}.zip" \
+              Tripo-Echo3D-Bridge-macOS-arm64.dmg \
+              Tripo-Echo3D-Bridge-macOS-x86_64.dmg \
+              README.md
+          )
+          python3 .github/scripts/release_package.py stage-mac \
+            --archive "release-assets/Tripo3d_echo3d_Bridge-mac-${RELEASE_TAG}.zip"
+      - name: Publish complete GitHub Release
+        env:
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          CONFIRM_REPLACE: ${{ inputs.confirm_replace }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null; then
+            if [ "$CONFIRM_REPLACE" != "true" ]; then
+              echo "::error::已有标签 ${RELEASE_TAG}，未确认删除"
+              exit 1
+            fi
+            echo "Replacing existing release $RELEASE_TAG"
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              gh release delete "$RELEASE_TAG" --yes --cleanup-tag
+            else
+              git push origin ":refs/tags/$RELEASE_TAG"
+            fi
+          fi
+          gh release create "$RELEASE_TAG" --target "$(git rev-parse HEAD)" --title "$RELEASE_TAG" --generate-notes --draft
+          gh release upload "$RELEASE_TAG" release-assets/*.zip
+          gh release edit "$RELEASE_TAG" --draft=false
+          echo "Published $RELEASE_TAG with Windows and macOS packages. Run Upload Release to distribute." >> "$GITHUB_STEP_SUMMARY"

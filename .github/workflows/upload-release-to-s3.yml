@@ -1,0 +1,174 @@
+name: Upload Release
+
+# Webhook 放在 GitHub Secret FEISHU_WEBHOOK_TOKEN，值为完整地址或 hook 后面的 token。
+# 上传 Windows 和 macOS 包。manifest.json 和 latest.zip 只指向 Windows 包，供自动更新使用。
+# macOS 包是两个架构的 DMG，另存为 Tripo3d_echo3d_Bridge-mac-latest.zip。没有国内包。
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Published release tag to distribute or restore (for example: v1.1.0)"
+        required: true
+        type: string
+      upload_s3:
+        description: Upload international package to S3
+        required: true
+        default: true
+        type: boolean
+      update_latest:
+        description: Update latest ZIP and manifest (also used for rollback)
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: distribute-release
+  cancel-in-progress: false
+
+env:
+  PACKAGE_NAME: Tripo3d_echo3d_Bridge
+  S3_BUCKET: tripo-public
+  S3_PATH: plugins/echo3d-bridge
+  AWS_REGION: us-east-1
+
+jobs:
+  validate-targets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a destination
+        env:
+          UPLOAD_S3: ${{ inputs.upload_s3 }}
+        run: test "$UPLOAD_S3" = "true"
+
+  upload-s3:
+    needs: validate-targets
+    if: inputs.upload_s3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Download Windows release asset
+        id: package_name
+        uses: ./.github/actions/download-release-asset
+        with:
+          release_tag: ${{ inputs.release_tag }}
+          asset_name: ${{ env.PACKAGE_NAME }}-${{ inputs.release_tag }}.zip
+          github_token: ${{ github.token }}
+
+      - name: Download macOS release asset
+        id: mac_package
+        uses: ./.github/actions/download-release-asset
+        with:
+          release_tag: ${{ inputs.release_tag }}
+          asset_name: ${{ env.PACKAGE_NAME }}-mac-${{ inputs.release_tag }}.zip
+          github_token: ${{ github.token }}
+
+      - name: Validate package and generate manifest
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ZIP_NAME: ${{ steps.package_name.outputs.zip_name }}
+          MAC_ZIP: ${{ steps.mac_package.outputs.zip_name }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/release_package.py manifest \
+            --archive "$ZIP_NAME" \
+            --url "https://tripo-public.tripo3d.ai/plugins/echo3d-bridge/$ZIP_NAME" \
+            --output manifest.json
+          python3 .github/scripts/release_package.py stage-mac --archive "$MAC_ZIP"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload package to S3
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ZIP_NAME: ${{ steps.package_name.outputs.zip_name }}
+          MAC_ZIP: ${{ steps.mac_package.outputs.zip_name }}
+        run: |
+          set -euo pipefail
+          RELEASE_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          aws s3 cp "${ZIP_NAME}" "s3://${S3_BUCKET}/${S3_PATH}/${ZIP_NAME}" \
+            --content-type "application/zip" \
+            --metadata "version=${RELEASE_TAG},release-date=${RELEASE_DATE}" \
+            --cache-control "public, max-age=31536000"
+          aws s3 cp "${MAC_ZIP}" "s3://${S3_BUCKET}/${S3_PATH}/${MAC_ZIP}" \
+            --content-type "application/zip" \
+            --metadata "version=${RELEASE_TAG},release-date=${RELEASE_DATE}" \
+            --cache-control "public, max-age=31536000"
+
+          if [ "${{ inputs.update_latest }}" = "true" ]; then
+            aws s3 cp "${ZIP_NAME}" "s3://${S3_BUCKET}/${S3_PATH}/${PACKAGE_NAME}-latest.zip" \
+              --content-type "application/zip" \
+              --metadata "version=${RELEASE_TAG},release-date=${RELEASE_DATE}" \
+              --cache-control "public, max-age=300"
+            aws s3 cp "${MAC_ZIP}" "s3://${S3_BUCKET}/${S3_PATH}/${PACKAGE_NAME}-mac-latest.zip" \
+              --content-type "application/zip" \
+              --metadata "version=${RELEASE_TAG},release-date=${RELEASE_DATE}" \
+              --cache-control "public, max-age=300"
+            aws s3 cp manifest.json "s3://${S3_BUCKET}/${S3_PATH}/manifest.json" \
+              --cache-control "public, max-age=300" --content-type "application/json"
+          fi
+
+          echo "## S3 upload" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Release tag: ${RELEASE_TAG}" >> $GITHUB_STEP_SUMMARY
+          echo "Windows: s3://${S3_BUCKET}/${S3_PATH}/${ZIP_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "macOS: s3://${S3_BUCKET}/${S3_PATH}/${MAC_ZIP}" >> $GITHUB_STEP_SUMMARY
+          echo "Updated latest: ${{ inputs.update_latest }}" >> $GITHUB_STEP_SUMMARY
+
+  notify-feishu:
+    name: Notify Feishu
+    needs: [upload-s3]
+    if: always() && !cancelled() && needs.upload-s3.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Read GitHub Release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          BODY=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')
+          URL=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json url --jq '.url')
+          {
+            echo "url=${URL}"
+            echo "body<<EOF"
+            printf '%s\n' "$BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Notify Feishu
+        uses: ./.github/actions/feishu-notify
+        with:
+          webhook_token: ${{ secrets.FEISHU_WEBHOOK_TOKEN }}
+          status: success
+          title: "Tripo Echo3D Bridge ${{ inputs.release_tag }} 已上传"
+          description: |
+            **版本**: ${{ inputs.release_tag }}
+            **S3**: 已上传
+            **Windows**: https://tripo-public.tripo3d.ai/plugins/echo3d-bridge/Tripo3d_echo3d_Bridge-latest.zip
+            **macOS**: https://tripo-public.tripo3d.ai/plugins/echo3d-bridge/Tripo3d_echo3d_Bridge-mac-latest.zip
+
+            **更新说明**
+            ${{ steps.release.outputs.body }}
+          link_text: 查看 GitHub Release
+          link_url: ${{ steps.release.outputs.url }}
