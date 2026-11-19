@@ -150,12 +150,23 @@ def upload(path, name, credentials, transport=None):
         raise UploadUncertain('Network failure; the server may have accepted the upload. Inspect the collection before retrying') from None
 
 
+def collection_scope(key):
+    return hashlib.sha256(key.encode()).hexdigest()[:24]
+
+
 class Receiver:
-    def __init__(self, ledger, scope, credentials=None, dry_run=False, uploader=upload):
+    def __init__(self, ledger, scope, credentials=None, dry_run=False, uploader=upload, *, log=None):
         self.ledger, self.scope, self.credentials = ledger, scope, credentials
         self.dry_run, self.uploader = dry_run, uploader
+        self.log = log
         self.current = None
         self.task = None
+
+    def _say(self, text):
+        if self.log:
+            self.log(text)
+        else:
+            print(text, flush=True)
 
     async def send(self, ws, kind, **payload):
         await ws.send(json.dumps({'type': kind, 'payload': payload}))
@@ -174,25 +185,25 @@ class Receiver:
             if previous and previous[0] != sha:
                 raise UploadUncertain('Delivery id reused with different bytes; blocked')
             if self.dry_run:
-                print(f'DRY RUN validated {transfer["size"]} bytes; SHA-256 {sha}. No cloud request. Bridge queue retained.', flush=True)
+                self._say(f'DRY RUN validated {transfer["size"]} bytes; SHA-256 {sha}. No cloud request. Bridge queue retained.')
                 await self.send(ws, 'import_complete', fileId=delivery, success=False, message='Dry run only; not uploaded')
                 return
             if previous and previous[1] == 'accepted':
                 entry = previous[2]
-                print(f'Already accepted; skipping duplicate delivery. Entry {entry}', flush=True)
+                self._say(f'Already accepted; skipping duplicate delivery. Entry {entry}')
             elif previous:
                 raise UploadUncertain(f'Delivery {delivery} has an unresolved prior attempt. Use receipts and resolve commands')
             else:
                 self.ledger.set(self.scope, delivery, sha, 'uncertain')
                 entry = await asyncio.to_thread(self.uploader, transfer['path'], transfer['name'], self.credentials)
                 self.ledger.set(self.scope, delivery, sha, 'accepted', entry)
-                print(f'ACCEPTED by echo3D. Entry {entry}. Processing may still be pending.', flush=True)
+                self._say(f'ACCEPTED by echo3D. Entry {entry}. Processing may still be pending.')
             await self.send(ws, 'import_complete', fileId=delivery, success=True,
                             entryId=entry, message='echo3D accepted the asset; processing may still be pending')
         except ConnectionClosed:
-            print('Bridge disconnected. Any accepted receipt is retained; reconnect to acknowledge without re-uploading.', flush=True)
+            self._say('Bridge disconnected. Any accepted receipt is retained; reconnect to acknowledge without re-uploading.')
         except (ValueError, OSError, UploadUncertain) as exc:
-            print(f'NOT CONFIRMED: {exc}', flush=True)
+            self._say(f'NOT CONFIRMED: {exc}')
             try:
                 await self.send(ws, 'import_complete', fileId=delivery, success=False, message=bridge_failure_message(exc))
             except ConnectionClosed:
@@ -207,7 +218,7 @@ class Receiver:
         p = msg.get('payload', {})
         if msg.get('type') != 'file_transfer':
             if msg.get('type') == 'transfer_cancelled':
-                print('Bridge rejected or cancelled this delivery. Any in-flight request is NOT retried automatically.', flush=True)
+                self._say('Bridge rejected or cancelled this delivery. Any in-flight request is NOT retried automatically.')
                 # Do not cancel an in-flight HTTP thread or discard its receipt.
                 if not self.task or self.task.done():
                     self.cleanup()
@@ -249,12 +260,12 @@ class Receiver:
 
     async def run(self, url='ws://127.0.0.1:60710/echo3d'):
         try:
-            async with connect(url, max_size=MAX_MESSAGE_BYTES, compression=None) as ws:
+            async with connect(url, max_size=MAX_MESSAGE_BYTES, compression=None, proxy=None) as ws:
                 await self.send(ws, 'handshake', protocolVersion='1.1.0', clientName='echo3D cloud receiver')
                 msg, body = parse_message(await asyncio.wait_for(ws.recv(), 10))
                 if body or msg.get('type') != 'handshake_ack' or msg.get('payload', {}).get('success') is not True:
                     raise ValueError('Bridge handshake rejected; close the demo receiver first')
-                print('Connected. Waiting for queued or new Tripo models. Ctrl+C stops.', flush=True)
+                self._say('Connected. Waiting for queued or new Tripo models. Ctrl+C stops.')
                 async for raw in ws:
                     await self.frame(ws, raw)
         finally:
@@ -313,7 +324,7 @@ def main():
             credentials = dict(key=key, email=email, userKey=user_key)
             if sec_key:
                 credentials['secKey'] = sec_key
-            scope = hashlib.sha256(key.encode()).hexdigest()[:24]
+            scope = collection_scope(key)
             print(f'Target collection fingerprint: {scope}')
         asyncio.run(Receiver(ledger, scope, credentials, args.dry_run).run())
     finally:

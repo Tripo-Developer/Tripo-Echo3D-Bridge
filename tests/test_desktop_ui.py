@@ -99,9 +99,24 @@ class DesktopTests(unittest.TestCase):
                 with patch('desktop_app.webbrowser.open') as browser:
                     app.peer_links['studio'].invoke()
                     browser.assert_called_once_with('http://127.0.0.1:60710/bridge-client.html')
-                with patch('desktop_app.webbrowser.open') as browser:
+                secret = 'collection-secret'
+                with patch.object(app, 'ask_cloud_credentials', return_value=None) as ask, \
+                        patch.object(app.runtime, 'start_cloud') as start:
                     app.peer_links['echo3d'].invoke()
-                    browser.assert_called_once_with('http://127.0.0.1:60710/demo')
+                    ask.assert_called_once()
+                    start.assert_not_called()
+                credentials = {'key': secret, 'email': 'a@b.c', 'userKey': 'user-secret'}
+                with patch.object(app, 'ask_cloud_credentials', return_value=credentials), \
+                        patch.object(app.runtime, 'start_cloud', return_value=True) as start:
+                    app.peer_links['echo3d'].invoke()
+                    start.assert_called_once_with(credentials)
+                    self.assertNotIn(secret, app.log.get('1.0', 'end'))
+                with patch.object(app.runtime, 'cloud_active', return_value=True), \
+                        patch('desktop_app.messagebox.askyesno', return_value=True) as confirm, \
+                        patch.object(app.runtime, 'stop_cloud') as stop:
+                    app.peer_links['echo3d'].invoke()
+                    confirm.assert_called_once()
+                    stop.assert_called_once_with()
                 emit('error', message='Port already in use')
                 error_dialog.assert_called_once()
                 self.assertIn('Unavailable', app.status_var.get())

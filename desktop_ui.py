@@ -1,7 +1,8 @@
 """Native desktop presentation. Network and filesystem work live in desktop_app."""
-import tkinter as tk
 import sys
+import tkinter as tk
 from pathlib import Path
+from tkinter import messagebox
 
 import customtkinter as ctk
 
@@ -85,7 +86,7 @@ class BridgeWindow(ctk.CTk):
         connections.grid_columnconfigure((1, 3), weight=1, uniform='links')
         self.peer_labels = {}
         self.peer_links = {}
-        link_commands = {'studio': self.open_studio, 'echo3d': self.open_demo}
+        link_commands = {'studio': self.open_studio, 'echo3d': self.open_echo3d}
         for col, title, role in ((0, 'Tripo Studio', 'studio'),
                                  (2, 'Local bridge', 'local'),
                                  (4, 'echo3D', 'echo3d')):
@@ -160,6 +161,68 @@ class BridgeWindow(ctk.CTk):
                                  text_color=MUTED, font=ctk.CTkFont('Consolas', 12), wrap='word', state='disabled',
                                  scrollbar_button_color=RAISED, scrollbar_button_hover_color='#353B42')
         self.log.grid(row=1, column=0, sticky='nsew', padx=(8, 2), pady=(4, 8))
+
+    def ask_cloud_credentials(self):
+        """Session-only echo3D keys. Nothing here is written to disk."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title('Connect echo3D')
+        dialog.configure(fg_color=BG)
+        dialog.geometry('480x560')
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        chosen = {}
+        frame = ctk.CTkFrame(dialog, fg_color=BG)
+        frame.pack(fill='both', expand=True, padx=24, pady=20)
+        self._label(frame, 'Upload to echo3D', 20, bold=True).pack(anchor='w')
+        self._label(frame,
+                    'Every queued model and every new model is uploaded to this collection. '
+                    'Credentials are used for this session only and are not saved. Close the browser demo first.',
+                    13, MUTED, wraplength=420, justify='left').pack(anchor='w', pady=(8, 16))
+        fields = {}
+        for name, label, secret in (
+                ('key', 'Collection key', True),
+                ('email', 'Account email', False),
+                ('userKey', 'User Authentication Key', True),
+                ('secKey', 'Security key, if enabled', True)):
+            self._label(frame, label, 12, MUTED).pack(anchor='w', pady=(8, 2))
+            options = {'show': '*'} if secret else {}
+            entry = ctk.CTkEntry(frame, height=36, fg_color=PANEL, border_color=RAISED,
+                                 text_color=TEXT, **options)
+            entry.pack(fill='x')
+            fields[name] = entry
+
+        buttons = ctk.CTkFrame(frame, fg_color='transparent')
+        buttons.pack(fill='x', pady=(20, 0))
+
+        def cancel():
+            dialog.destroy()
+
+        def submit():
+            values = {name: widget.get().strip() for name, widget in fields.items()}
+            if not values['key'] or not values['email'] or not values['userKey']:
+                messagebox.showerror('Connect echo3D',
+                                     'Collection key, account email and User Authentication Key are required.',
+                                     parent=dialog)
+                return
+            if not messagebox.askokcancel('Upload to echo3D',
+                                          'Upload every queued and new model to this collection?',
+                                          parent=dialog):
+                return
+            credentials = {'key': values['key'], 'email': values['email'], 'userKey': values['userKey']}
+            if values['secKey']:
+                credentials['secKey'] = values['secKey']
+            for widget in fields.values():
+                widget.delete(0, 'end')
+            chosen['credentials'] = credentials
+            dialog.destroy()
+
+        self._button(buttons, 'Connect and upload', submit, primary=True, width=170).pack(side='right')
+        self._button(buttons, 'Cancel', cancel, width=100).pack(side='right', padx=(0, 8))
+        dialog.protocol('WM_DELETE_WINDOW', cancel)
+        dialog.bind('<Escape>', lambda event: cancel())
+        dialog.after(0, lambda: (dialog.lift(), dialog.focus_force(), fields['key'].focus_set(), dialog.grab_set()))
+        dialog.wait_window()
+        return chosen.get('credentials')
 
     def clear_log(self):
         self.log.configure(state='normal')

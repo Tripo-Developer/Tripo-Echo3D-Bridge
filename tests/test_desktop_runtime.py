@@ -105,6 +105,51 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(response.headers['Content-Type'], 'text/html; charset=utf-8')
         self.assertIsNone(serve_demo(connection, type('R', (), {'path': '/missing.html'})()))
 
+    def test_cloud_receiver_joins_the_bridge(self):
+        probe = socket.socket()
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        with tempfile.TemporaryDirectory() as folder:
+            events = queue.Queue()
+            runtime = RelayRuntime(events, Path(folder) / 'inbox', port=port, retry_interval=.05)
+            runtime.start()
+            try:
+                self.wait_event(events, 'ready')
+                secret = 'collection-secret'
+
+                def forbid_upload(*_args):
+                    raise AssertionError('upload')
+
+                self.assertTrue(runtime.start_cloud(
+                    {'key': secret, 'email': 'a@b.c', 'userKey': 'user-secret'},
+                    ledger_path=Path(folder) / 'receipts.sqlite3', uploader=forbid_upload))
+                deadline = time.monotonic() + 5
+                connected = False
+                logged = []
+                while time.monotonic() < deadline and not (connected and any('Connected' in line for line in logged)):
+                    try:
+                        event, payload = events.get(timeout=max(.01, deadline - time.monotonic()))
+                    except queue.Empty:
+                        continue
+                    self.assertNotIn(event, ('error', 'cloud_error'), payload)
+                    if event == 'cloud_log':
+                        logged.append(payload.get('message', ''))
+                        self.assertNotIn(secret, payload.get('message', ''))
+                        self.assertNotIn('user-secret', payload.get('message', ''))
+                    if event == 'connections' and payload.get('echo3dConnected'):
+                        connected = True
+                self.assertTrue(connected, logged)
+                self.assertTrue(any('Connected' in line for line in logged))
+                self.assertTrue(runtime.cloud_active())
+                self.assertFalse(runtime.start_cloud(
+                    {'key': secret, 'email': 'a@b.c', 'userKey': 'user-secret'},
+                    ledger_path=Path(folder) / 'receipts.sqlite3', uploader=forbid_upload))
+                runtime.stop_cloud(wait=True, timeout=5)
+                self.assertFalse(runtime.cloud_active())
+            finally:
+                runtime.stop()
+
     def test_access_denied_is_fatal_not_occupancy(self):
         self.assertTrue(is_port_in_use(OSError(10048, 'busy')))
         self.assertTrue(is_port_in_use(OSError(errno.EADDRINUSE, 'busy')))

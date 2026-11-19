@@ -17,8 +17,9 @@ from datetime import datetime
 from tkinter import filedialog, messagebox
 from desktop_ui import BridgeWindow
 
+from cloud_receiver import Ledger, Receiver, collection_scope
 from echo3d_bridge.server import Relay, serve, PORT, MAX_MESSAGE_BYTES, DEFAULT_INBOX
-from echo3d_bridge.settings import load_inbox, save_inbox, validate_inbox
+from echo3d_bridge.settings import APP_DATA, load_inbox, save_inbox, validate_inbox
 
 HOST = "127.0.0.1"
 ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
@@ -60,6 +61,10 @@ class RelayRuntime:
         self.server = None
         self.relay: Relay | None = None
         self.stop_requested = threading.Event()
+        self._cloud_lock = threading.Lock()
+        self._cloud_task: asyncio.Task | None = None
+        self._cloud_starting = False
+        self._cloud_stop = False
 
     def start(self):
         self.thread.start()
@@ -144,7 +149,102 @@ class RelayRuntime:
                     self._emit('cache_error', {'message': str(exc)})
             threading.Thread(target=save_for_restart, daemon=True).start()
 
+    def cloud_active(self):
+        with self._cloud_lock:
+            return self._cloud_starting or (self._cloud_task is not None and not self._cloud_task.done())
+
+    def start_cloud(self, credentials, *, ledger_path=None, uploader=None):
+        """Connect the upload receiver to this bridge. Credentials stay in memory only."""
+        if not self.loop.is_running():
+            self._emit('cloud_error', {'message': 'Bridge is not running.'})
+            return False
+        with self._cloud_lock:
+            if self._cloud_starting or (self._cloud_task is not None and not self._cloud_task.done()):
+                return False
+            self._cloud_stop = False
+            self._cloud_starting = True
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._launch_cloud(credentials, ledger_path, uploader), self.loop)
+        except Exception:
+            with self._cloud_lock:
+                self._cloud_starting = False
+            raise
+        return True
+
+    async def _launch_cloud(self, credentials, ledger_path, uploader):
+        with self._cloud_lock:
+            stopped = self._cloud_stop
+        if stopped:
+            with self._cloud_lock:
+                self._cloud_starting = False
+            return
+        ledger = Ledger(ledger_path or (APP_DATA / 'cloud-receipts.sqlite3'))
+        try:
+            scope = collection_scope(credentials['key'])
+            self._emit('cloud_log', {'message': f'Connecting echo3D receiver. Collection fingerprint {scope}.'})
+            kwargs = {'log': lambda text: self._emit('cloud_log', {'message': text})}
+            if uploader is not None:
+                kwargs['uploader'] = uploader
+            receiver = Receiver(ledger, scope, credentials, **kwargs)
+            task = asyncio.create_task(receiver.run(f'ws://127.0.0.1:{self.port}/echo3d'))
+        except Exception as exc:
+            with self._cloud_lock:
+                self._cloud_starting = False
+            ledger.close()
+            self._emit('cloud_error', {'message': str(exc)})
+            return
+        with self._cloud_lock:
+            self._cloud_task = task
+            self._cloud_starting = False
+            stopped = self._cloud_stop
+        task.add_done_callback(lambda done, held=ledger: self._finish_cloud(done, held))
+        if stopped and not task.done():
+            task.cancel()
+
+    def _finish_cloud(self, task, ledger):
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            self._emit('cloud_log', {'message': 'echo3D receiver stopped.'})
+        except Exception as exc:
+            self._emit('cloud_error', {'message': str(exc).strip() or 'echo3D receiver stopped.'})
+        else:
+            self._emit('cloud_log', {'message': 'echo3D receiver stopped.'})
+        finally:
+            with self._cloud_lock:
+                if self._cloud_task is task:
+                    self._cloud_task = None
+                self._cloud_starting = False
+            ledger.close()
+
+    async def _stop_cloud(self):
+        with self._cloud_lock:
+            task = self._cloud_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    def stop_cloud(self, wait=False, timeout=240):
+        with self._cloud_lock:
+            self._cloud_stop = True
+            active = self._cloud_starting or (self._cloud_task is not None and not self._cloud_task.done())
+        if not active or not self.loop.is_running():
+            return
+        future = asyncio.run_coroutine_threadsafe(self._stop_cloud(), self.loop)
+        if not wait:
+            return
+        try:
+            future.result(timeout)
+        except Exception as exc:
+            self._emit('cloud_log', {'message': f'echo3D receiver stop did not finish: {exc}'})
+
     def stop(self):
+        if self.loop.is_running():
+            self.stop_cloud(wait=True)
         self.stop_requested.set()
         if self.stop_event is not None and self.loop.is_running():
             self.loop.call_soon_threadsafe(self.stop_event.set)
@@ -180,11 +280,23 @@ class App(BridgeWindow):
             return
         webbrowser.open(f'http://{HOST}:{PORT}/bridge-client.html')
 
-    def open_demo(self):
+    def open_echo3d(self):
         if not self.demo_ready:
-            self._log('echo3D demo page is available once the bridge is running.')
+            self._log('echo3D upload is available once the bridge is running.')
             return
-        webbrowser.open(f'http://{HOST}:{PORT}/demo')
+        if self.runtime.cloud_active():
+            if messagebox.askyesno(
+                    'Disconnect echo3D',
+                    'Stop the echo3D upload receiver?\n\nModels already accepted stay in the collection. '
+                    'If an upload was in progress, check the collection before connecting again.',
+                    parent=self):
+                self.runtime.stop_cloud()
+            return
+        credentials = self.ask_cloud_credentials()
+        if not credentials:
+            return
+        if not self.runtime.start_cloud(credentials):
+            self._log('echo3D receiver is already running.')
 
     def _drain_events(self):
         try:
@@ -232,6 +344,13 @@ class App(BridgeWindow):
                     if payload.get('localPath'): self._log('Local file: ' + payload['localPath'])
                 elif event == "peer_disconnected":
                     self._log(f"{payload.get('role')} disconnected")
+                elif event == 'cloud_log':
+                    if payload.get('message'):
+                        self._log(payload['message'])
+                elif event == 'cloud_error':
+                    message = payload.get('message') or 'echo3D receiver stopped.'
+                    self._log('echo3D: ' + message)
+                    messagebox.showerror('echo3D', message, parent=self)
         except queue.Empty:
             pass
         self.after(100, self._drain_events)

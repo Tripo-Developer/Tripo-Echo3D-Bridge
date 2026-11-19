@@ -1,6 +1,6 @@
 # Tripo to echo3D: cloud upload receiver with echo3D errors in the Bridge
 
-This adds the echo3D upload workflow on top of the local bridge transfer: a cloud receiver uploads delivered models to echo3D and shows the actual echo3D error in the Bridge transfer panel and Logs, not only in the receiver terminal. No delivery ID, diagnose or reconciliation command is needed for normal uploads. The Bridge app itself is unchanged; the existing v0.2.2 install already displays the receiver's failure reason.
+This adds the echo3D upload workflow on top of the local bridge transfer: a cloud receiver uploads delivered models to echo3D and shows the actual echo3D error in the Bridge transfer panel and Logs, not only in the receiver terminal. No delivery ID, diagnose or reconciliation command is needed for normal uploads. Click **echo3D** in the desktop window to enter credentials and start this receiver. The installed v0.2.2 binary does not include that control; run `python desktop_main.py` from this revision. The window displays the receiver's failure reason.
 
 ## Setup on macOS / Linux
 
@@ -15,6 +15,8 @@ python3 -m venv .venv
 Enter collection key, account email, User Authentication Key and optional Security Key locally when prompted. Type UPLOAD to start. Keep this Terminal open and send models from Tripo as before. Close the browser demo receiver if it is connected: only one echo3D receiver can connect at a time.
 
 On Windows: create the environment with `py -3 -m venv .venv` and use `.venv\Scripts\python.exe` instead of `.venv/bin/python` in the next commands.
+
+The desktop window starts the same receiver. Click **echo3D**, enter the collection key, account email, User Authentication Key and optional Security Key, then confirm. Credentials stay in that session and are not written to disk. Close the browser demo first; only one echo3D receiver can be connected. Disconnect from the same control, or close the window.
 
 ## What you will see
 

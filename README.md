@@ -34,7 +34,7 @@ In the window, expand **Local storage**, then use **Change…** to pick a writab
 
 ### Desktop window
 
-**Tripo Studio** opens the local sender at http://127.0.0.1:60710/bridge-client.html. **echo3D** opens the local demo receiver at http://127.0.0.1:60710/demo. Neither link signs the user in or uploads to echo3D.
+**Tripo Studio** opens the local sender at http://127.0.0.1:60710/bridge-client.html. **echo3D** asks for the collection key, account email, User Authentication Key and optional Security Key, then uploads queued models to echo3D. Those values stay in memory for the session and are not saved. The page at http://127.0.0.1:60710/demo only lists a received file and does not upload. Close it before connecting from the window; only one echo3D receiver can be connected.
 
 The transfer title is the model name. It stays empty when nothing is transferring. **Saved to your computer** means the local copy is complete. **Delivered to echo3D** appears only after the receiver confirms. Logs stay visible and scroll inside the log panel. **Clear** empties them.
 
@@ -46,7 +46,7 @@ An unfinished transfer is left as a `.part` file and is cleaned up on disconnect
 
 1. Start the Bridge.
 2. Click **Tripo Studio** to open `bridge-client.html`, connect, and send a GLB. The page defaults to port 60710. The desktop window should show the file name, then **Saved to your computer**. **Open folder** shows the saved file.
-3. Click **echo3D** in the window, or open http://127.0.0.1:60710/demo, then click **Connect**.
+3. Open http://127.0.0.1:60710/demo and click **Connect**. This preview does not upload to echo3D. To upload, click **echo3D** in the Bridge window and enter the collection credentials instead.
 4. The demo lists the model with its SHA-256 and a download button. Models sent later are delivered the same way.
 
 ## Reference browser client
