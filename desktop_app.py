@@ -463,9 +463,9 @@ class App(BridgeWindow):
         if self.connected[role] != connected:
             self._log(f"{role} {'Connected' if connected else 'disconnected'}")
         self.connected[role] = connected
-        text = 'Connected' if connected else 'Not connected'
-        self.peer_labels[role].configure(text=text, text_color=GREEN if connected else MUTED)
         if role == 'echo3d':
+            self.peer_labels[role].configure(text='Connected' if connected else 'Not connected',
+                                             text_color=GREEN if connected else MUTED)
             self.note_echo3d(connected)
         self._apply_connection_headline()
 

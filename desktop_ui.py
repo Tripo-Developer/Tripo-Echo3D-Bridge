@@ -155,7 +155,7 @@ class BridgeWindow(ctk.CTk):
                 self._echo_connected = False
                 self._echo_status_icon = ctk.CTkLabel(status, text='', image=self._echo_login_icon, height=16)
                 self._echo_status_icon.pack(side='left')
-                label = self._label(status, 'Not connected', 11, YELLOW, height=16)
+                label = self._label(status, 'Not connected', 11, RED, height=16)
                 label.pack(side='left', padx=(4, 0))
                 self._bind_echo_status(status, label)
                 self.connect_btn = label
@@ -163,12 +163,12 @@ class BridgeWindow(ctk.CTk):
                 status = ctk.CTkFrame(connections, fg_color='transparent')
                 status.grid(row=2, column=col)
                 ctk.CTkLabel(status, text='', image=self._globe_icon, height=16).pack(side='left')
-                label = self._label(status, 'Not connected', 11, MUTED, height=16)
+                label = self._label(status, 'Waiting for connection', 11, YELLOW, height=16)
                 label.pack(side='left', padx=(4, 0))
             else:
-                label = self._label(connections, 'Starting…', 11, MUTED)
-                label.grid(row=2, column=col)
-            self.peer_labels[role] = label
+                label = None
+            if label is not None:
+                self.peer_labels[role] = label
         self._link_lines = [tk.Frame(connections, height=2, bg='#5c5c64', bd=0, highlightthickness=0) for _ in (0, 1)]
         self._link_line_job = None
         self._placing_links = False
@@ -509,7 +509,7 @@ class BridgeWindow(ctk.CTk):
         self._echo_status_icon.configure(image=icon)
         label = self.peer_labels.get('echo3d')
         if label is not None:
-            label.configure(text_color=GREEN if connected else YELLOW)
+            label.configure(text_color=GREEN if connected else RED)
 
     def _bind_echo_status(self, status, label):
         def activate(_event=None):
@@ -517,7 +517,7 @@ class BridgeWindow(ctk.CTk):
             return 'break'
 
         def hover(_event=None):
-            label.configure(text_color='#ffe58a' if not self._echo_connected else '#6ee7b7')
+            label.configure(text_color='#fda4af' if not self._echo_connected else '#6ee7b7')
 
         def leave(_event=None):
             x, y = status.winfo_pointerxy()
@@ -698,7 +698,7 @@ class BridgeWindow(ctk.CTk):
             canvas.create_rectangle(1, 1, 1 + fill, height - 1, fill=color, outline=color, tags='progress')
 
     def _apply_connection_headline(self):
-        """The globe row is the state itself, the same wording Substance Painter uses."""
+        """One Tripo Studio status, the same wording as Blender."""
         studio = bool(getattr(self, 'connected', {}).get('studio'))
         if self._port_blocked:
             text, color = 'Port in use', RED
@@ -706,18 +706,21 @@ class BridgeWindow(ctk.CTk):
             text, color = 'Connection error', RED
         elif self._listener_ready and studio:
             text, color = 'Connected', GREEN
-        else:
+        elif self._listener_ready:
             text, color = 'Waiting for connection', YELLOW
+        else:
+            text, color = 'Disconnected', RED
         self.status_var.set(text)
         self.status_badge.configure(text_color=color)
+        label = self.peer_labels.get('studio')
+        if label is not None:
+            label.configure(text=text, text_color=color)
 
     def show_service(self, ready):
         self._listener_ready = bool(ready)
         self._listener_failed = not ready
         self._port_blocked = False
         self._apply_connection_headline()
-        self.peer_labels['local'].configure(text='Ready' if ready else 'Startup failed',
-                                            text_color=GREEN if ready else RED)
         if ready:
             self.phase_label.configure(text='', text_color=TEXT)
             self.transfer_var.set('')
@@ -732,7 +735,6 @@ class BridgeWindow(ctk.CTk):
         self._listener_ready = False
         self._listener_failed = False
         self._apply_connection_headline()
-        self.peer_labels['local'].configure(text='Waiting for port', text_color=RED)
         self.phase_label.configure(text='', text_color=TEXT)
         self.transfer_var.set('Another application is using this port.')
         self.transfer_label.configure(text_color=RED)
