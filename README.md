@@ -85,6 +85,6 @@ macOS, on a Mac:
 ./build.sh
 ```
 
-The app is `dist/Tripo-Echo3D-Bridge.app`. The script also writes `dist/Tripo-Echo3D-Bridge-macOS-<arch>.zip` and a drag-to-Applications disk image, `dist/Tripo-Echo3D-Bridge-macOS-<arch>.dmg`, for the Mac it is running on. A Windows machine cannot build this package. Run the script on macOS, or run the **Build macOS** workflow, which builds both Apple silicon and Intel. The first launch may require Control-click → Open, because the app is not notarized.
+The app is `dist/Tripo-Echo3D-Bridge.app`. The script also writes `dist/Tripo-Echo3D-Bridge-macOS-<arch>.zip` and a drag-to-Applications disk image, `dist/Tripo-Echo3D-Bridge-macOS-<arch>.dmg`, for the Mac it is running on. A Windows machine cannot build this package. Run the script on macOS. **Publish Release** builds both Apple silicon and Intel. The first launch may require Control-click → Open, because the app is not notarized.
 
 Development check: `python -m unittest discover -s tests -v`. The listener binds both IPv4 and IPv6 loopback. `web/bridge-client.html` is an optional protocol tool on port 60710, not the Bridge window.
