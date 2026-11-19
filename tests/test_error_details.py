@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 import httpx
 from cloud_receiver import upload, UploadUncertain, safe_error_detail, bridge_failure_message
-from test_cloud_receiver import glb
+try:
+    from test_cloud_receiver import glb
+except ImportError:
+    from tests.test_cloud_receiver import glb
 
 class ErrorDetailTests(unittest.TestCase):
     def test_json_error_retains_useful_detail(self):

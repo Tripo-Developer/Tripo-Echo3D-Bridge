@@ -13,7 +13,10 @@ from unittest.mock import patch
 from websockets.asyncio.server import serve
 import cloud_receiver as cr
 from echo3d_bridge.server import Relay, MAX_MESSAGE_BYTES
-from test_cloud_receiver import glb
+try:
+    from test_cloud_receiver import glb
+except ImportError:
+    from tests.test_cloud_receiver import glb
 
 class LoopbackFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_original_queue_flow_error_then_success_real_sockets(self):
